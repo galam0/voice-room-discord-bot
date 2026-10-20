@@ -45,7 +45,8 @@
 1. https://discord.com/developers/applications → New Application → Bot → **Reset Token**으로 토큰 복사
 2. OAuth2 → URL Generator
    - Scopes: `bot`, `applications.commands`
-   - Bot Permissions: **View Channels, Send Messages, Connect, Manage Channels, Manage Roles, Move Members**
+   - Bot Permissions: **View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Connect, Manage Channels, Manage Roles, Move Members**
+   - 또는 초대 링크를 직접: `https://discord.com/oauth2/authorize?client_id=애플리케이션ID&permissions=286379024&scope=bot%20applications.commands`
 3. 만들어진 링크로 서버에 초대
 4. 서버 설정 → 역할에서 봇 역할이 너무 아래 있지 않게 (잠금 기능이 권한을 수정해야 함)
 

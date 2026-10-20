@@ -103,6 +103,17 @@ cd ~/voice-room-bot && git pull && ./venv/bin/pip install -r requirements.txt
 sudo systemctl restart voice-room-bot
 ```
 
+### 자동 업데이트 (선택)
+
+GitHub에 올라온 새 버전을 5분마다 확인해서 자동으로 받고 재시작하게 하려면 한 번만:
+
+```bash
+chmod +x /root/voice-room-bot/auto-update.sh
+(crontab -l 2>/dev/null; echo "*/5 * * * * /root/voice-room-bot/auto-update.sh >> /root/voice-room-bot/update.log 2>&1") | crontab -
+```
+
+업데이트 기록은 `cat /root/voice-room-bot/update.log`, 끄려면 `crontab -e`에서 그 줄을 지우면 돼요.
+
 `.env`와 `data.json`(서버별 설정)은 깃에 안 올라가니까 `git pull` 해도 그대로 남아요.
 
 ## 3. 서버에서 처음 설정

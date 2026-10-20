@@ -226,6 +226,8 @@ store = Store(DATA_FILE)
 
 intents = discord.Intents.default()
 intents.voice_states = True
+# 들어올 때 자동 역할을 쓰려면 개발자 포털 Bot → Server Members Intent를 켜고 .env에 MEMBERS_INTENT=1
+intents.members = os.getenv("MEMBERS_INTENT", "0") == "1"
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 같은 사람이 동시에 방을 두 개 만드는 걸 막는 잠금
@@ -832,6 +834,19 @@ async def on_interaction(interaction: discord.Interaction):
 
 
 @bot.event
+async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+    roles = [r for r in (member.guild.get_role(rid) for rid in store.guild(member.guild.id).get("auto_roles", []))
+             if r and r < member.guild.me.top_role]
+    if roles:
+        try:
+            await member.add_roles(*roles, reason="자동 역할")
+        except discord.HTTPException as e:
+            log.warning("자동 역할 실패 (%s): %s", member.guild.name, e)
+
+
+@bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     await apply_menu_reaction(payload, add=True)
 
@@ -1106,10 +1121,38 @@ async def cmd_setup_list(interaction: discord.Interaction):
     embed.add_field(name="등록된 게임 (🖼️ = 아이콘, 옆은 자동 멘션 역할)",
                     value=", ".join(sorted(game_lines)) or "없음 (`/통화방설정 게임추가`)", inline=False)
     embed.add_field(name="구인 채널", value=f"<#{recruit}>" if recruit else "명령어 친 채널", inline=False)
+    auto = store.guild(gid).get("auto_roles", [])
+    embed.add_field(name="자동 역할", value=" ".join(f"<@&{r}>" for r in auto) or "없음", inline=False)
     room_cat = store.room_category(gid)
     embed.add_field(name="방 카테고리 (기본)", value=f"📁 <#{room_cat}>" if room_cat else "생성 채널이 있는 카테고리",
                     inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@setup_group.command(name="자동역할", description="서버에 들어온 사람에게 자동으로 줄 역할 (다시 고르면 빠져요)")
+@app_commands.describe(역할="추가하거나 뺄 역할")
+async def cmd_setup_auto_role(interaction: discord.Interaction, 역할: discord.Role):
+    if not bot.intents.members:
+        await interaction.response.send_message(
+            "자동 역할을 쓰려면 먼저 설정이 필요해요.\n"
+            "1. 디스코드 개발자 포털 → 봇 → Bot → **Server Members Intent** 켜기\n"
+            "2. VM의 `.env`에 `MEMBERS_INTENT=1` 한 줄 추가 후 봇 재시작", ephemeral=True)
+        return
+    problem = role_problem(interaction.guild, 역할)
+    if problem:
+        await interaction.response.send_message(problem, ephemeral=True)
+        return
+    roles = store.guild(interaction.guild.id).setdefault("auto_roles", [])
+    if 역할.id in roles:
+        roles.remove(역할.id)
+        msg = f"{역할.mention} 자동 역할을 뺐어요."
+    else:
+        roles.append(역할.id)
+        msg = f"{역할.mention} 자동 역할로 넣었어요."
+    store.save()
+    current = " ".join(f"<@&{r}>" for r in roles) or "없음"
+    await interaction.response.send_message(f"{msg}\n지금 자동 역할: {current}", ephemeral=True,
+                                            allowed_mentions=discord.AllowedMentions.none())
 
 
 @setup_group.command(name="카테고리", description="통화방이 만들어질 카테고리를 정해요")
@@ -1604,6 +1647,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
             f"{cmd('통화방설정 게임역할')} 게임에 역할 연결 (구인 시 자동 멘션)",
             f"{cmd('통화방설정 게임삭제')} 게임 삭제",
             f"{cmd('통화방설정 구인채널')} 구인 글이 올라갈 채널",
+            f"{cmd('통화방설정 자동역할')} 들어온 사람에게 자동으로 줄 역할",
             f"{cmd('통화방설정 목록')} 지금 설정 한눈에 보기",
         ]))
         admin.add_field(name="역할 메뉴 (이모지 → 역할)", inline=False, value="\n".join([

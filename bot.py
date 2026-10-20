@@ -181,7 +181,13 @@ class Store:
         return self.games(guild_id).get(game_key(name)) if name else None
 
     def set_game(self, guild_id: int, name: str, icon_file):
-        self.guild(guild_id).setdefault("games", {})[game_key(name)] = {"name": name, "file": icon_file}
+        games = self.guild(guild_id).setdefault("games", {})
+        entry = games.setdefault(game_key(name), {})
+        entry.update(name=name, file=icon_file)  # 연결된 역할 등 다른 설정은 유지
+        self.save()
+
+    def set_game_role(self, guild_id: int, name: str, role_id):
+        self.games(guild_id)[game_key(name)]["role"] = role_id
         self.save()
 
     def remove_game(self, guild_id: int, name: str):
@@ -787,6 +793,12 @@ async def game_autocomplete(interaction: discord.Interaction, current: str):
     return [app_commands.Choice(name=n, value=n) for n in sorted(names) if key in game_key(n)][:25]
 
 
+def mention_ok(guild: discord.Guild, roles, channel=None) -> bool:
+    """봇이 이 역할들을 실제로 멘션(알림)할 수 있는지."""
+    perms = (channel or guild).permissions_for(guild.me) if channel else guild.me.guild_permissions
+    return perms.mention_everyone or all(r.mentionable for r in roles)
+
+
 async def resolve_game(interaction: discord.Interaction, name: str | None):
     """등록된 게임이면 표시 이름을 돌려주고, 아니면 안내 후 False."""
     if not name:
@@ -1006,11 +1018,15 @@ async def cmd_setup_list(interaction: discord.Interaction):
         if cfg.get("category"):
             detail += f", 📁 <#{cfg['category']}>"
         hub_lines.append(f"<#{cid}> ({detail})")
-    game_lines = [f"{e['name']}{' 🖼️' if e.get('file') else ''}" for e in store.games(gid).values()]
+    def game_line(e):
+        line = e["name"] + (" 🖼️" if e.get("file") else "")
+        return line + (f" <@&{e['role']}>" if e.get("role") else "")
+
+    game_lines = [game_line(e) for e in store.games(gid).values()]
     recruit = store.recruit_channel(gid)
     embed = discord.Embed(title="통화방 봇 설정", color=discord.Color.blurple())
     embed.add_field(name="생성 채널", value="\n".join(hub_lines) or "없음 (`/통화방설정 만들기`)", inline=False)
-    embed.add_field(name="등록된 게임 (🖼️ = 아이콘 있음)",
+    embed.add_field(name="등록된 게임 (🖼️ = 아이콘, 옆은 자동 멘션 역할)",
                     value=", ".join(sorted(game_lines)) or "없음 (`/통화방설정 게임추가`)", inline=False)
     embed.add_field(name="구인 채널", value=f"<#{recruit}>" if recruit else "명령어 친 채널", inline=False)
     room_cat = store.room_category(gid)
@@ -1048,6 +1064,24 @@ async def cmd_setup_recruit(interaction: discord.Interaction, 채널: discord.Te
     store.set_recruit_channel(interaction.guild.id, 채널.id if 채널 else None)
     msg = f"구인 글은 이제 {채널.mention}에 올라가요." if 채널 else "구인 채널 지정을 해제했어요. 명령어 친 채널에 올라가요."
     await interaction.response.send_message(msg, ephemeral=True)
+
+
+@setup_group.command(name="게임역할", description="게임에 역할을 연결해요. 그 게임으로 구인하면 역할이 자동으로 멘션돼요")
+@app_commands.describe(게임="등록된 게임", 역할="자동으로 멘션할 역할 (비우면 연결 해제)")
+@app_commands.autocomplete(게임=game_autocomplete)
+async def cmd_setup_game_role(interaction: discord.Interaction, 게임: str, 역할: discord.Role | None = None):
+    game = await resolve_game(interaction, 게임)
+    if not game:
+        return
+    store.set_game_role(interaction.guild.id, game, 역할.id if 역할 else None)
+    if not 역할:
+        await interaction.response.send_message(f"**{game}** 역할 연결을 해제했어요.", ephemeral=True)
+        return
+    msg = f"이제 **{game}** 구인 글이 올라오면 {역할.mention}이(가) 자동으로 멘션돼요."
+    if not mention_ok(interaction.guild, [역할]):
+        msg += ("\n⚠️ 지금은 봇이 이 역할을 멘션할 수 없어요. 서버 설정 → 역할 → 이 역할에서 "
+                "'모든 사람이 이 역할을 @멘션하도록 허용'을 켜 주세요.")
+    await interaction.response.send_message(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
 
 @setup_group.command(name="게임추가", description="게임을 등록해요 (아이콘은 선택, 이미 있는 게임이면 아이콘만 바꿔요)")
@@ -1158,7 +1192,7 @@ async def tier_autocomplete(interaction: discord.Interaction, current: str):
     인원="나 포함 최대 몇 명으로 할지 (예: 5)",
     게임="등록된 게임 중에서 고르기 (게임 방이면 자동으로 채워져요)",
     티어="예: 골드, 골드~플래 (선택)",
-    멘션역할="알림 보낼 역할 (선택)",
+    멘션역할="알림 보낼 역할 (게임에 연결된 역할은 자동으로 같이 멘션돼요)",
 )
 @app_commands.autocomplete(게임=game_autocomplete, 티어=tier_autocomplete)
 async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Range[str, 1, 300],
@@ -1196,7 +1230,12 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
             "author_name": member.display_name, "content": 내용, "game": game, "target": 인원,
             "tags": [티어.strip()] if 티어 and 티어.strip() else [], "applicants": [],
             "expires_at": time.time() + RECRUIT_EXPIRE_HOURS * 3600 if RECRUIT_EXPIRE_HOURS > 0 else None}
-    header = f"{멘션역할.mention} " if 멘션역할 else ""
+    roles = [멘션역할] if 멘션역할 else []
+    game_role_id = (store.game(interaction.guild.id, game) or {}).get("role")
+    game_role = interaction.guild.get_role(game_role_id) if game_role_id else None
+    if game_role and game_role not in roles:
+        roles.append(game_role)
+    header = "".join(f"{r.mention} " for r in roles)
     try:
         msg = await target.send(
             content=f"{header}{member.mention}님이 {voice.mention}에서 같이 할 사람을 구해요!",
@@ -1209,7 +1248,10 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
         return
     info.update(channel=target.id, message=msg.id)
     store.set_post(voice.id, **info)
-    await interaction.followup.send(f"구인 글을 올렸어요: {msg.jump_url}", ephemeral=True)
+    done = f"구인 글을 올렸어요: {msg.jump_url}"
+    if roles and not mention_ok(interaction.guild, roles, target):
+        done += "\n⚠️ 역할 멘션이 알림으로 가지 않았을 수 있어요. 관리자에게 그 역할의 '@멘션 허용' 설정을 부탁해 주세요."
+    await interaction.followup.send(done, ephemeral=True)
 
 
 # ─────────────────────────────── /도움말 ───────────────────────────────
@@ -1245,7 +1287,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
         "방이 비거나 시간이 지나면 자동으로 마감돼요."
     ))
     recruit.add_field(name="명령어", inline=False, value="\n".join([
-        f"{cmd('구인')} 구인 글 올리기 (게임·티어는 목록에서 골라요)",
+        f"{cmd('구인')} 구인 글 올리기 (게임·티어는 목록에서, 멘션역할로 알림)",
         f"{cmd('구인마감')} 내 구인 글 마감하기",
     ]))
     embeds = [room, recruit]
@@ -1261,6 +1303,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
         ]))
         admin.add_field(name="게임·구인", inline=False, value="\n".join([
             f"{cmd('통화방설정 게임추가')} 게임 등록 (아이콘 첨부 가능)",
+            f"{cmd('통화방설정 게임역할')} 게임에 역할 연결 (구인 시 자동 멘션)",
             f"{cmd('통화방설정 게임삭제')} 게임 삭제",
             f"{cmd('통화방설정 구인채널')} 구인 글이 올라갈 채널",
             f"{cmd('통화방설정 목록')} 지금 설정 한눈에 보기",

@@ -29,6 +29,7 @@
 | `지정 <채널> [게임] [인원]` | 기존 음성 채널을 생성 채널로 |
 | `해제 <채널>` | 생성 채널 지정 해제 (채널은 안 지움) |
 | `게임추가 <게임> [아이콘]` | 게임 등록 (아이콘은 선택, 다시 하면 아이콘만 교체) |
+| `게임역할 <게임> [역할]` | 게임에 역할 연결 → 그 게임으로 구인하면 역할 자동 멘션 (비우면 해제) |
 | `게임삭제 <게임>` | 등록한 게임 삭제 |
 | `카테고리 [카테고리] [생성채널]` | 방이 만들어질 카테고리 (생성채널을 고르면 그 채널로 만든 방에만 적용, 카테고리를 비우면 해제) |
 | `구인채널 [채널]` | 구인 글이 올라갈 채널 (비우면 해제) |
@@ -47,8 +48,8 @@
 1. https://discord.com/developers/applications → New Application → Bot → **Reset Token**으로 토큰 복사
 2. OAuth2 → URL Generator
    - Scopes: `bot`, `applications.commands`
-   - Bot Permissions: **View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Connect, Manage Channels, Manage Roles, Move Members**
-   - 또는 초대 링크를 직접: `https://discord.com/oauth2/authorize?client_id=애플리케이션ID&permissions=286379024&scope=bot%20applications.commands`
+   - Bot Permissions: **View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Mention Everyone(역할 멘션용), Connect, Manage Channels, Manage Roles, Move Members**
+   - 또는 초대 링크를 직접: `https://discord.com/oauth2/authorize?client_id=애플리케이션ID&permissions=286510096&scope=bot%20applications.commands`
 3. 만들어진 링크로 서버에 초대
 4. 서버 설정 → 역할에서 봇 역할이 너무 아래 있지 않게 (잠금 기능이 권한을 수정해야 함)
 

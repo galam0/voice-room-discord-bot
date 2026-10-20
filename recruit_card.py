@@ -15,6 +15,7 @@ PANEL = (30, 31, 34)
 TEXT = (242, 243, 245)
 SUB = (181, 186, 193)
 MUTED = (128, 132, 142)
+HIGHLIGHT = (254, 231, 92)   # 구인 내용 글자색 (눈에 잘 띄는 노랑)
 COLORS = {
     "open": (88, 101, 242),    # 모집 중
     "full": (35, 165, 90),     # 모집 완료
@@ -67,14 +68,22 @@ def ellipsize(draw, text, f, max_w):
 
 
 def wrap(draw, text, f, max_w, max_lines):
-    """한글은 띄어쓰기가 적어서 글자 단위로 줄바꿈."""
+    """띄어쓰기 기준으로 줄바꿈, 한 단어가 너무 길면 글자 단위로 자름."""
     lines, line = [], ""
-    for ch in text.replace("\n", " "):
-        if text_w(draw, line + ch, f) > max_w:
+    for word in text.replace("\n", " ").split(" "):
+        candidate = f"{line} {word}" if line else word
+        if text_w(draw, candidate, f) <= max_w:
+            line = candidate
+            continue
+        if line:
             lines.append(line)
-            line = ch.lstrip()
-        else:
-            line += ch
+        line = ""
+        for ch in word:  # 긴 단어는 글자 단위로
+            if text_w(draw, line + ch, f) > max_w:
+                lines.append(line)
+                line = ch
+            else:
+                line += ch
     if line:
         lines.append(line)
     if len(lines) > max_lines:
@@ -152,13 +161,13 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     accent = COLORS[status]
     tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     f_title = font(44, True)
-    lines = wrap(tmp, content, f_title, W - PAD * 2, 3)
+    lines = wrap(tmp, content, f_title, W - PAD * 2 - 64, 3)
 
     people = members + applicants
     slots = min(max(target, len(people)), MAX_SLOTS)
     per_row = 8
     rows = (slots + per_row - 1) // per_row
-    height = (PAD + ICON + 28 + len(lines) * 60 + (20 + 44 if tags else 0) + 20 + 34 + 36 + 1 + 36 + 34 + 20
+    height = (PAD + ICON + 28 + len(lines) * 60 + 36 + (20 + 44 if tags else 0) + 20 + 34 + 36 + 1 + 36 + 34 + 20
               + rows * (SLOT + 46) + (44 if footer else 0) + PAD - 10)
 
     img = Image.new("RGB", (W, height), BG)
@@ -180,11 +189,16 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     d.text((title_x, y + ICON / 2), ellipsize(d, title, font(32, True), W - PAD - st_w - 20 - title_x),
            font=font(32, True), fill=TEXT, anchor="lm")
 
-    # 내용
+    # 내용 (색깔 박스로 강조)
     y += ICON + 28
+    box_h = len(lines) * 60 + 36
+    d.rounded_rectangle((PAD, y, W - PAD, y + box_h), radius=16, fill=PANEL)
+    d.rounded_rectangle((PAD, y, PAD + 8, y + box_h), radius=4, fill=accent)
+    ty = y + 14
     for line in lines:
-        d.text((PAD, y), line, font=f_title, fill=TEXT if status != "closed" else SUB)
-        y += 60
+        d.text((PAD + 36, ty), line, font=f_title, fill=HIGHLIGHT if status != "closed" else SUB)
+        ty += 60
+    y += box_h
 
     # 티어·포지션 태그
     if tags:

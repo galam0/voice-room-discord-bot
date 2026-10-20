@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import os
+import random
 import re
 import time
 from datetime import datetime, time as dtime, timedelta
@@ -64,11 +65,11 @@ class Store:
 
     def __init__(self, path: str):
         self.path = path
-        self.data = {"guilds": {}, "rooms": {}, "posts": {}, "menus": {}, "reservations": {}}
+        self.data = {"guilds": {}, "rooms": {}, "posts": {}, "menus": {}, "reservations": {}, "giveaways": {}}
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 self.data = json.load(f)
-        for key in ("guilds", "rooms", "posts", "menus", "reservations"):
+        for key in ("guilds", "rooms", "posts", "menus", "reservations", "giveaways"):
             self.data.setdefault(key, {})
         self._migrate()
 
@@ -332,7 +333,7 @@ async def transfer_owner(channel: discord.VoiceChannel, new_owner: discord.Membe
     store.update_room(channel.id, owner=new_owner.id)
     if room and room["locked"]:
         await channel.set_permissions(new_owner, connect=True, reason="방장 위임")
-    await notify(channel, f"👑 {new_owner.mention}님이 새 방장이 됐어요. 컨트롤 패널 버튼을 쓸 수 있어요.")
+    await notify(channel, f"👑 {new_owner.mention}님이 방장이 됐어요.")
     if room and not room["custom_name"]:
         # 이름 변경은 제한이 있어서 기다리지 않게 백그라운드로
         asyncio.create_task(try_rename(channel, default_name(new_owner, room.get("game"))))
@@ -419,15 +420,8 @@ def panel_view(channel_id: int) -> discord.ui.View:
 
 async def send_panel(channel: discord.VoiceChannel, owner: discord.Member):
     embed = discord.Embed(
-        title="🎛️ 통화방 컨트롤 패널",
-        description=(
-            f"방장: {owner.mention}\n\n"
-            "🔒 **잠금** 지금 있는 사람만 들어올 수 있게\n"
-            "🔓 **공개** 누구나 들어올 수 있게\n"
-            "✅ **허용** 잠긴 방에 들어올 사람 고르기\n"
-            "✏️ **이름** · 👥 **인원** · 👑 **방장넘기기**\n\n"
-            "방장만 누를 수 있어요."
-        ),
+        title="통화방 설정",
+        description=f"방장 {owner.mention}",
         color=discord.Color.blurple(),
     )
     try:
@@ -520,7 +514,7 @@ async def handle_panel(interaction: discord.Interaction, action: str, channel_id
     if action == "lock":
         await interaction.response.defer(ephemeral=True)
         await lock_room(ch, interaction.user)
-        await interaction.followup.send("🔒 잠갔어요. 친구는 ✅ 허용으로 들일 수 있어요.", ephemeral=True)
+        await interaction.followup.send("🔒 잠갔어요.", ephemeral=True)
     elif action == "unlock":
         await interaction.response.defer(ephemeral=True)
         await unlock_room(ch)
@@ -549,7 +543,7 @@ def expire_text(info: dict):
     t = datetime.fromtimestamp(info["expires_at"], TZ)
     ampm = "오전" if t.hour < 12 else "오후"
     hour = t.hour % 12 or 12
-    return f"{ampm} {hour}:{t.minute:02d}에 자동 마감돼요"
+    return f"{ampm} {hour}:{t.minute:02d} 마감"
 
 
 async def _applicant_entry(guild: discord.Guild, applicant: dict):
@@ -715,10 +709,10 @@ async def handle_recruit_apply(interaction: discord.Interaction, voice_id: int):
         applicants.append({"id": user.id, "name": user.display_name})
         store.set_post(voice_id, **info)
         await interaction.response.send_message(
-            "참가 신청했어요! 준비되면 '통화방 들어가기'를 눌러 주세요. (다시 누르면 취소)", ephemeral=True)
+            "참가 신청했어요.", ephemeral=True)
         if voice:
             try:
-                await voice.send(f"🙋 {user.mention}님이 참가 신청했어요! <@{info['author']}>",
+                await voice.send(f"{user.mention}님이 참가 신청했어요. <@{info['author']}>",
                                  allowed_mentions=discord.AllowedMentions(users=True))
             except discord.HTTPException:
                 pass
@@ -740,6 +734,8 @@ async def on_ready():
         expire_posts.start()
     if not reservation_tick.is_running():
         reservation_tick.start()
+    if not giveaway_tick.is_running():
+        giveaway_tick.start()
     # 꺼져 있는 동안 비거나 사라진 방 정리
     for cid in list(store.data["rooms"].keys()):
         ch = bot.get_channel(int(cid))
@@ -848,6 +844,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     store.remove_menu(payload.message_id)
     store.remove_res(payload.message_id)
+    store.data["giveaways"].pop(str(payload.message_id), None)
 
 
 @bot.event
@@ -966,7 +963,7 @@ async def cmd_lock(interaction: discord.Interaction):
         return
     await interaction.response.defer(ephemeral=True)
     await lock_room(ch, interaction.user)
-    await interaction.followup.send("🔒 잠갔어요. 친구를 들이려면 `/통화방 허용`을 써 주세요.", ephemeral=True)
+    await interaction.followup.send("🔒 잠갔어요.", ephemeral=True)
 
 
 @room_group.command(name="공개", description="잠금을 풀어서 누구나 들어올 수 있게 해요")
@@ -1043,7 +1040,7 @@ async def cmd_setup_make(interaction: discord.Interaction):
     category = first_hub_category(guild) or await guild.create_category("통화방", reason="통화방 봇 설정")
     hub = await guild.create_voice_channel("➕ 통화방 만들기", category=category, reason="통화방 봇 설정")
     store.set_hub(guild.id, hub.id)
-    await interaction.followup.send(f"{hub.mention} 만들었어요! 여기 들어가면 개인 통화방이 생겨요.", ephemeral=True)
+    await interaction.followup.send(f"{hub.mention} 만들었어요.", ephemeral=True)
 
 
 @setup_group.command(name="게임채널", description="게임별 생성 채널을 만들어요 (예: ➕ 발로란트 5인방)")
@@ -1061,7 +1058,7 @@ async def cmd_setup_game_hub(interaction: discord.Interaction, 게임: str, 인�
     hub = await guild.create_voice_channel(name[:100], category=category, reason="통화방 봇 게임 채널")
     store.set_hub(guild.id, hub.id, game=game, limit=인원)
     limit_text = f"인원 {인원}명 제한" if 인원 else "인원 제한 없음"
-    await interaction.followup.send(f"{hub.mention} 만들었어요! 들어가면 'OOO의 {game}' 방이 생겨요 ({limit_text}).",
+    await interaction.followup.send(f"{hub.mention} 만들었어요. ({limit_text})",
                                     ephemeral=True)
 
 
@@ -1074,7 +1071,7 @@ async def cmd_setup_set(interaction: discord.Interaction, 채널: discord.VoiceC
     if game is False:
         return
     store.set_hub(interaction.guild.id, 채널.id, game=game, limit=인원)
-    await interaction.response.send_message(f"{채널.mention}을(를) 생성 채널로 지정했어요. 새 방은 같은 카테고리에 생겨요.",
+    await interaction.response.send_message(f"{채널.mention}을(를) 생성 채널로 지정했어요.",
                                             ephemeral=True)
 
 
@@ -1317,7 +1314,7 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     header = "".join(f"{r.mention} " for r in roles)
     try:
         msg = await target.send(
-            content=f"{header}{member.mention}님이 {voice.mention}에서 같이 할 사람을 구해요!",
+            content=f"{header}{member.mention} · {voice.mention}",
             file=await recruit_card_file(info, voice),
             view=recruit_view(info, voice.jump_url),
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
@@ -1343,8 +1340,7 @@ def menu_embed(menu: dict) -> discord.Embed:
     lines = [f"{item['emoji']}  →  <@&{item['role']}>" for item in menu["items"].values()]
     embed = discord.Embed(title=menu["title"], color=discord.Color.blurple(),
                           description=(menu.get("desc") + "\n\n" if menu.get("desc") else "")
-                          + ("\n".join(lines) or "아직 등록된 역할이 없어요. 관리자가 `/역할메뉴 추가`로 넣을 수 있어요."))
-    embed.set_footer(text="이모지를 누르면 역할이 생기고, 반응을 취소하면 역할이 빠져요")
+                          + ("\n".join(lines) or "-"))
     return embed
 
 
@@ -1437,7 +1433,7 @@ async def cmd_menu_create(interaction: discord.Interaction, 제목: app_commands
         return
     store.set_menu(msg.id, menu)
     await interaction.response.send_message(
-        f"역할 메뉴를 올렸어요: {msg.jump_url}\n이제 `/역할메뉴 추가`로 이모지와 역할을 넣어 주세요.", ephemeral=True)
+        f"역할 메뉴를 올렸어요: {msg.jump_url}", ephemeral=True)
 
 
 @menu_group.command(name="추가", description="역할 메뉴에 이모지와 역할을 넣어요 (같은 이모지면 역할을 바꿔요)")
@@ -1471,7 +1467,7 @@ async def cmd_menu_add(interaction: discord.Interaction, 메뉴: str, 이모지:
     menu["items"][emoji_key(emoji)] = {"emoji": str(emoji), "role": 역할.id}
     store.set_menu(msg.id, menu)
     await msg.edit(embed=menu_embed(menu))
-    await interaction.followup.send(f"{emoji} 을(를) 누르면 {역할.mention} 역할을 받아요.", ephemeral=True,
+    await interaction.followup.send(f"{emoji} → {역할.mention}", ephemeral=True,
                                     allowed_mentions=discord.AllowedMentions.none())
 
 
@@ -1495,7 +1491,7 @@ async def cmd_menu_remove(interaction: discord.Interaction, 메뉴: str, 이모�
             await msg.clear_reaction(emoji)
         except discord.HTTPException:
             pass
-    await interaction.followup.send(f"{emoji} 을(를) 메뉴에서 뺐어요. (이미 받은 역할은 그대로 남아요)", ephemeral=True)
+    await interaction.followup.send(f"{emoji} 을(를) 뺐어요.", ephemeral=True)
 
 
 # ─────────────────────────────── /도움말 ───────────────────────────────
@@ -1533,7 +1529,8 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
     recruit.add_field(name="명령어", inline=False, value="\n".join([
         f"{cmd('구인')} 구인 글 올리기 (게임·티어는 목록에서, 멘션역할로 알림)",
         f"{cmd('구인마감')} 내 구인 글 마감하기",
-        f"{cmd('예약')} 시간 정해서 모으기 (내전 등, 10분 전 알림 + 통화방 자동 생성)",
+        f"{cmd('예약')} 시간 정해서 모으기 (10분 전 알림 + 통화방 자동 생성, 꽉 차면 대기)",
+        f"{cmd('뽑기')} 항목이나 통화방 사람 중 랜덤 뽑기",
     ]))
     embeds = [room, recruit]
     if is_admin:
@@ -1557,6 +1554,11 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
             f"{cmd('역할메뉴 만들기')} 역할 메뉴 글 올리기",
             f"{cmd('역할메뉴 추가')} 이모지와 역할 넣기",
             f"{cmd('역할메뉴 빼기')} 이모지 빼기 (글을 지우면 메뉴도 사라져요)",
+        ]))
+        admin.add_field(name="추첨 (🎉 반응)", inline=False, value="\n".join([
+            f"{cmd('추첨 시작')} 추첨 글 올리기",
+            f"{cmd('추첨 끝내기')} 지금 바로 끝내기",
+            f"{cmd('추첨 다시뽑기')} 끝난 추첨 다시 뽑기",
         ]))
         admin.set_footer(text="처음이면: 만들기 → 게임추가 → (게임채널·카테고리·구인채널)")
         embeds.append(admin)
@@ -1655,10 +1657,7 @@ async def res_card_file(res: dict, status: str) -> discord.File:
     if entry and entry.get("file") and os.path.exists(entry["file"]):
         with open(entry["file"], "rb") as f:
             icon = f.read()
-    footer = {"open": "시작 10분 전에 참가자 알림 + 통화방 자동 생성", "full": "시작 10분 전에 참가자 알림 + 통화방 자동 생성",
-              "started": None, "cancelled": None}[status]
-    if status in ("open", "full") and res.get("room"):
-        footer = "통화방이 열렸어요! 흐린 사람은 아직 안 들어온 사람이에요"
+    footer = None
     buf = await asyncio.to_thread(
         recruit_card.render_card,
         icon=icon,
@@ -1672,8 +1671,9 @@ async def res_card_file(res: dict, status: str) -> discord.File:
         remaining=res["target"] - len(res["participants"]),
         count_pending=True,
         status=status,
-        tags=[f"{time_text(res['start_at'])} 시작"] + res.get("tags", []),
-        meta=f"주최 {res['author_name']}   ·   참가 버튼으로 신청",
+        tags=[f"{time_text(res['start_at'])} 시작"] + res.get("tags", [])
+             + ([f"대기 {len(res['waitlist'])}명"] if res.get("waitlist") else []),
+        meta=f"주최 {res['author_name']}",
         footer=footer,
         custom_emojis=await custom_emoji_images(res["content"]),
     )
@@ -1731,23 +1731,36 @@ async def handle_res_join(interaction: discord.Interaction, message_id: int):
         return
     user = interaction.user
     if user.id == res["author"]:
-        await interaction.response.send_message("주최자는 자동으로 참가돼 있어요. 예약을 없애려면 '취소'를 눌러 주세요.",
+        await interaction.response.send_message("주최자는 이미 참가돼 있어요.",
                                                 ephemeral=True)
         return
-    joined = any(p["id"] == user.id for p in res["participants"])
-    if not joined and len(res["participants"]) >= res["target"]:
-        await interaction.response.send_message("자리가 다 찼어요.", ephemeral=True)
-        return
     await interaction.response.defer()
-    if joined:
+    waiting = res.setdefault("waitlist", [])
+    promoted = None
+    if any(p["id"] == user.id for p in res["participants"]):
         res["participants"] = [p for p in res["participants"] if p["id"] != user.id]
+        if waiting:  # 빈자리는 대기 1번에게
+            promoted = waiting.pop(0)
+            res["participants"].append(promoted)
         note = "참가를 취소했어요."
+    elif any(p["id"] == user.id for p in waiting):
+        res["waitlist"] = [p for p in waiting if p["id"] != user.id]
+        note = "대기를 취소했어요."
+    elif len(res["participants"]) >= res["target"]:
+        waiting.append({"id": user.id, "name": user.display_name})
+        note = f"자리가 다 차서 대기 {len(waiting)}번이에요."
     else:
         res["participants"].append({"id": user.id, "name": user.display_name})
-        note = f"참가했어요! {time_text(res['start_at'])} 10분 전에 알림이 가요. (다시 누르면 취소)"
+        note = "참가했어요."
     store.set_res(message_id, res)
     await update_res_post(message_id, res, msg=interaction.message)
     await interaction.followup.send(note, ephemeral=True)
+    if promoted:
+        try:
+            await interaction.channel.send(f"<@{promoted['id']}> 대기에서 참가로 넘어왔어요.",
+                                           allowed_mentions=discord.AllowedMentions(users=True))
+        except discord.HTTPException:
+            pass
 
 
 async def handle_res_cancel(interaction: discord.Interaction, message_id: int):
@@ -1756,7 +1769,7 @@ async def handle_res_cancel(interaction: discord.Interaction, message_id: int):
         await interaction.response.send_message("이미 끝났거나 취소된 예약이에요.", ephemeral=True)
         return
     if interaction.user.id != res["author"] and not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("예약한 사람만 취소할 수 있어요. 참가를 빼려면 '참가'를 다시 눌러 주세요.",
+        await interaction.response.send_message("예약한 사람만 취소할 수 있어요.",
                                                 ephemeral=True)
         return
     await interaction.response.defer()
@@ -1786,12 +1799,12 @@ async def remind_res(message_id: int, res: dict):
     res["room"] = room.id if room else None
     store.set_res(message_id, res)
     mentions = " ".join(f"<@{p['id']}>" for p in res["participants"])
-    where = f"{room.mention}로 모여 주세요!" if room else "모일 준비를 해 주세요!"
+    where = room.mention if room else ""
     view = discord.ui.View()
     if room:
         view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=room.jump_url))
     try:
-        await channel.send(f"⏰ **{res.get('game') or '예약'} 10분 후 시작!** {mentions}\n{where}",
+        await channel.send(f"⏰ {res.get('game') or '예약'} 10분 후 시작 {where}\n{mentions}",
                            view=view if room else discord.utils.MISSING,
                            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
     except discord.HTTPException as e:
@@ -1871,7 +1884,7 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
     header = "".join(f"{r.mention} " for r in roles)
     try:
         msg = await target.send(
-            content=f"{header}{member.mention}님이 **{time_text(res['start_at'])}**에 {game or '같이 할'} 사람을 모아요!",
+            content=f"{header}{member.mention} · {time_text(res['start_at'])} 예약",
             file=await res_card_file(res, res_status(res)),
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )
@@ -1880,12 +1893,196 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
         await interaction.followup.send(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
         return
     store.set_res(msg.id, res)
-    soon = start.timestamp() - time.time() <= REMIND_BEFORE
-    done = (f"예약 글을 올렸어요: {msg.jump_url}\n**{time_text(res['start_at'])}** 시작"
-            + (" (10분 안이라 곧 알림과 통화방이 만들어져요)" if soon else ", 10분 전에 알림과 통화방이 만들어져요."))
+    done = f"예약했어요: {msg.jump_url} ({time_text(res['start_at'])})"
     if roles and not mention_ok(interaction.guild, roles, target):
         done += "\n⚠️ 역할 멘션이 알림으로 가지 않았을 수 있어요. 관리자에게 그 역할의 '@멘션 허용' 설정을 부탁해 주세요."
     await interaction.followup.send(done, ephemeral=True)
+
+
+# ─────────────────────────────── /뽑기 ───────────────────────────────
+@bot.tree.command(name="뽑기", description="항목 중에서, 또는 지금 통화방 사람 중에서 랜덤으로 뽑아요")
+@app_commands.guild_only()
+@app_commands.describe(항목="쉼표로 구분 (예: 바인드, 헤이븐, 어센트). 비우면 통화방 사람 중에서", 개수="몇 개 뽑을지")
+async def cmd_pick(interaction: discord.Interaction, 항목: app_commands.Range[str, 1, 1000] | None = None,
+                   개수: app_commands.Range[int, 1, 20] = 1):
+    if 항목:
+        items = [x.strip() for x in re.split(r"[,\n]", 항목) if x.strip()]
+        if len(items) == 1:
+            items = 항목.split()
+    else:
+        voice = interaction.user.voice.channel if interaction.user.voice else None
+        if voice is None:
+            await interaction.response.send_message("항목을 적거나 통화방에 들어가 있어야 해요.", ephemeral=True)
+            return
+        items = [m.mention for m in humans(voice)]
+    if len(items) < 2:
+        await interaction.response.send_message("두 개 이상 있어야 뽑을 수 있어요.", ephemeral=True)
+        return
+    picked = random.sample(items, min(개수, len(items)))
+    await interaction.response.send_message(f"🎲 {'  ·  '.join(picked)}  ({len(items)}개 중)",
+                                            allowed_mentions=discord.AllowedMentions.none())
+
+
+# ─────────────────────────────── /추첨 (이모지 반응 추첨) ───────────────────────────────
+GIVEAWAY_EMOJI = "🎉"
+DURATION_RE = re.compile(r"(\d+)\s*(일|시간|분|초|d|h|m|s)", re.IGNORECASE)
+DURATION_UNITS = {"일": 86400, "d": 86400, "시간": 3600, "h": 3600, "분": 60, "m": 60, "초": 1, "s": 1}
+
+
+def parse_end(text: str):
+    """'10분', '1시간 30분', '2일' 또는 '21:00', '내일 20:00' → 끝나는 시각(타임스탬프)."""
+    cleaned = DURATION_RE.sub("", text).strip()
+    parts = DURATION_RE.findall(text)
+    if parts and not cleaned:
+        return time.time() + sum(int(n) * DURATION_UNITS[u.lower()] for n, u in parts)
+    t = parse_time(text, datetime.now(TZ))
+    return t.timestamp() if t else None
+
+
+def giveaway_embed(g: dict, winners: list[int] | None = None, entrants: int | None = None) -> discord.Embed:
+    end = int(g["end_at"])
+    if winners is None:
+        desc = f"당첨 {g['count']}명\n<t:{end}:R> 마감 (<t:{end}:t>)\n주최 <@{g['host']}>"
+        color = discord.Color.gold()
+    else:
+        desc = (f"당첨 {' '.join(f'<@{w}>' for w in winners) or '없음'}\n"
+                f"참여 {entrants}명\n주최 <@{g['host']}>")
+        color = discord.Color.dark_grey()
+    return discord.Embed(title=f"{GIVEAWAY_EMOJI} {g['prize']}", description=desc, color=color)
+
+
+async def giveaway_message(g: dict, message_id: int):
+    ch = bot.get_channel(g["channel"])
+    if ch is None:
+        return None
+    try:
+        return await ch.fetch_message(message_id)
+    except discord.HTTPException:
+        return None
+
+
+async def giveaway_entrants(msg: discord.Message) -> list:
+    reaction = discord.utils.get(msg.reactions, emoji=GIVEAWAY_EMOJI)
+    if reaction is None:
+        return []
+    return [u async for u in reaction.users(limit=None) if not u.bot]
+
+
+async def finish_giveaway(message_id: int, reroll: bool = False):
+    g = store.data["giveaways"].get(str(message_id))
+    if not g:
+        return None
+    msg = await giveaway_message(g, message_id)
+    if msg is None:
+        store.data["giveaways"].pop(str(message_id), None)
+        store.save()
+        return None
+    entrants = await giveaway_entrants(msg)
+    previous = set(g.get("winners", [])) if reroll else set()
+    pool = [u for u in entrants if u.id not in previous]
+    winners = random.sample(pool, min(g["count"], len(pool))) if pool else []
+    g.update(ended=True, winners=[w.id for w in winners], ended_at=time.time())
+    store.save()
+    try:
+        await msg.edit(embed=giveaway_embed(g, g["winners"], len(entrants)))
+        if winners:
+            label = "다시 뽑기" if reroll else "당첨"
+            await msg.reply(f"{GIVEAWAY_EMOJI} {' '.join(w.mention for w in winners)} {label} · {g['prize']}",
+                            allowed_mentions=discord.AllowedMentions(users=True))
+        else:
+            await msg.reply("참여한 사람이 없어서 당첨자가 없어요.")
+    except discord.HTTPException as e:
+        log.warning("추첨 결과 전송 실패: %s", e)
+    return winners
+
+
+@tasks.loop(seconds=15)
+async def giveaway_tick():
+    now = time.time()
+    for mid, g in list(store.data["giveaways"].items()):
+        try:
+            if not g.get("ended") and now >= g["end_at"]:
+                await finish_giveaway(int(mid))
+            elif g.get("ended") and now - g.get("ended_at", now) > 7 * 86400:  # 끝난 지 7일 지나면 정리
+                store.data["giveaways"].pop(mid, None)
+                store.save()
+        except Exception:
+            log.exception("추첨 처리 실패 %s", mid)
+
+
+def giveaway_choices(interaction: discord.Interaction, current: str, ended: bool):
+    out = []
+    for mid, g in store.data["giveaways"].items():
+        if g["guild"] == interaction.guild_id and bool(g.get("ended")) == ended and current.lower() in g["prize"].lower():
+            out.append(app_commands.Choice(name=g["prize"][:100], value=mid))
+    return out[:25]
+
+
+async def active_giveaway_autocomplete(interaction: discord.Interaction, current: str):
+    return giveaway_choices(interaction, current, ended=False)
+
+
+async def ended_giveaway_autocomplete(interaction: discord.Interaction, current: str):
+    return giveaway_choices(interaction, current, ended=True)
+
+
+giveaway_group = app_commands.Group(
+    name="추첨", description="🎉 반응을 누른 사람 중에서 추첨해요", guild_only=True,
+    default_permissions=discord.Permissions(manage_messages=True),
+)
+
+
+@giveaway_group.command(name="시작", description="추첨 글을 올려요")
+@app_commands.describe(상품="예: 문화상품권 5천원", 시간="예: 10분, 1시간 30분, 2일, 21:00", 당첨="당첨자 수",
+                       채널="올릴 채널 (비우면 지금 채널)")
+async def cmd_giveaway_start(interaction: discord.Interaction, 상품: app_commands.Range[str, 1, 200],
+                             시간: app_commands.Range[str, 1, 30], 당첨: app_commands.Range[int, 1, 20] = 1,
+                             채널: discord.TextChannel | None = None):
+    end_at = parse_end(시간)
+    if end_at is None or end_at - time.time() < 10:
+        await interaction.response.send_message("시간을 읽지 못했어요. `10분`, `1시간 30분`, `21:00`처럼 적어 주세요.",
+                                                ephemeral=True)
+        return
+    if end_at - time.time() > 30 * 86400:
+        await interaction.response.send_message("추첨은 30일 안쪽으로만 할 수 있어요.", ephemeral=True)
+        return
+    target = 채널 or interaction.channel
+    g = {"guild": interaction.guild.id, "channel": target.id, "prize": 상품, "count": 당첨,
+         "end_at": end_at, "host": interaction.user.id, "ended": False}
+    try:
+        msg = await target.send(embed=giveaway_embed(g))
+        await msg.add_reaction(GIVEAWAY_EMOJI)
+    except discord.HTTPException:
+        await interaction.response.send_message(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.",
+                                                ephemeral=True)
+        return
+    store.data["giveaways"][str(msg.id)] = g
+    store.save()
+    await interaction.response.send_message(f"추첨을 올렸어요: {msg.jump_url}", ephemeral=True)
+
+
+@giveaway_group.command(name="끝내기", description="진행 중인 추첨을 지금 바로 끝내고 당첨자를 뽑아요")
+@app_commands.autocomplete(추첨=active_giveaway_autocomplete)
+async def cmd_giveaway_end(interaction: discord.Interaction, 추첨: str):
+    g = store.data["giveaways"].get(추첨)
+    if not g or g.get("ended"):
+        await interaction.response.send_message("진행 중인 추첨을 목록에서 골라 주세요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    await finish_giveaway(int(추첨))
+    await interaction.followup.send("끝냈어요.", ephemeral=True)
+
+
+@giveaway_group.command(name="다시뽑기", description="끝난 추첨에서 당첨자를 다시 뽑아요 (이전 당첨자 제외)")
+@app_commands.autocomplete(추첨=ended_giveaway_autocomplete)
+async def cmd_giveaway_reroll(interaction: discord.Interaction, 추첨: str):
+    g = store.data["giveaways"].get(추첨)
+    if not g or not g.get("ended"):
+        await interaction.response.send_message("끝난 추첨을 목록에서 골라 주세요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    winners = await finish_giveaway(int(추첨), reroll=True)
+    await interaction.followup.send("다시 뽑았어요." if winners else "뽑을 사람이 없어요.", ephemeral=True)
 
 
 @bot.tree.error
@@ -1906,6 +2103,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 bot.tree.add_command(room_group)
 bot.tree.add_command(setup_group)
 bot.tree.add_command(menu_group)
+bot.tree.add_command(giveaway_group)
 
 if __name__ == "__main__":
     if not TOKEN:

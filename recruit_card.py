@@ -15,7 +15,6 @@ PANEL = (30, 31, 34)
 TEXT = (242, 243, 245)
 SUB = (181, 186, 193)
 MUTED = (128, 132, 142)
-HIGHLIGHT = (254, 231, 92)   # 구인 내용 글자색 (눈에 잘 띄는 노랑)
 COLORS = {
     "open": (88, 101, 242),    # 모집 중
     "full": (35, 165, 90),     # 모집 완료
@@ -189,14 +188,14 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     d.text((title_x, y + ICON / 2), ellipsize(d, title, font(32, True), W - PAD - st_w - 20 - title_x),
            font=font(32, True), fill=TEXT, anchor="lm")
 
-    # 내용 (색깔 박스로 강조)
+    # 내용 (박스로 강조)
     y += ICON + 28
     box_h = len(lines) * 60 + 36
     d.rounded_rectangle((PAD, y, W - PAD, y + box_h), radius=16, fill=PANEL)
     d.rounded_rectangle((PAD, y, PAD + 8, y + box_h), radius=4, fill=accent)
     ty = y + 14
     for line in lines:
-        d.text((PAD + 36, ty), line, font=f_title, fill=HIGHLIGHT if status != "closed" else SUB)
+        d.text((PAD + 36, ty), line, font=f_title, fill=TEXT if status != "closed" else SUB)
         ty += 60
     y += box_h
 

@@ -344,7 +344,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
                 members: list[tuple[str, bytes | None]], status: str, icon: bytes | None = None,
                 tags: list[str] | None = None, applicants: list[tuple[str, bytes | None]] | None = None,
                 footer: str | None = None, custom_emojis: dict | None = None,
-                meta: str | None = None) -> io.BytesIO:
+                meta: str | None = None, remaining: int | None = None) -> io.BytesIO:
     """
     title: 게임 이름 (없으면 '구인')
     members: 통화방에 있는 사람 [(이름, 아바타 PNG 바이트 또는 None), ...]
@@ -354,6 +354,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     tags: 티어·포지션 같은 태그
     footer: 맨 아래 작은 글씨 (예: 자동 마감 시간)
     custom_emojis: 서버 이모지 {ID: 이미지 바이트}
+    remaining: '모집 중 · N명 더'의 N (안 주면 target - members)
     """
     tags = [t for t in (tags or []) if t]
     applicants = applicants or []
@@ -380,7 +381,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     img.paste(ic, (PAD, y), ic)
     st = STATUS_TEXT[status]
     if status == "open":
-        st += f" · {max(target - len(members), 0)}명 더"
+        st += f" · {max(target - len(members) if remaining is None else remaining, 0)}명 더"
     f_st = font(24, True)
     st_w = text_w(d, st, f_st) + 36
     pill(d, W - PAD - st_w, y + (ICON - 44) / 2, st, f_st, PANEL, color=accent)

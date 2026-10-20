@@ -797,6 +797,18 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         if ch and store.post(ch.id):
             await refresh_post(ch.id)
 
+    # 4) 예약 통화방: 참가 안 누르고 들어와도 자리가 있으면 참가자로 추가, 들어오고 나갈 때마다 글 갱신
+    for ch in {before.channel, after.channel}:
+        found = res_by_room(ch.id) if ch else None
+        if not found:
+            continue
+        mid, res = found
+        if ch == after.channel and all(p["id"] != member.id for p in res["participants"]) \
+                and len(res["participants"]) < res["target"]:
+            res["participants"].append({"id": member.id, "name": member.display_name})
+            store.set_res(mid, res)
+        await update_res_post(int(mid), res)
+
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
@@ -1624,8 +1636,20 @@ def time_text(ts: float) -> str:
 async def res_card_file(res: dict, status: str) -> discord.File:
     guild = bot.get_guild(res["guild"])
     parts = sorted(res["participants"], key=lambda p: p["id"] != res["author"])  # 주최자가 맨 앞
-    members = await asyncio.gather(*[_applicant_entry(guild, p) for p in parts[:recruit_card.MAX_SLOTS]]) \
-        if guild else [(p["name"], None) for p in parts]
+    room = bot.get_channel(res["room"]) if res.get("room") and status in ("open", "full") else None
+    if room:  # 통화방이 열린 뒤: 들어온 사람은 진하게, 아직 안 온 사람은 '예정'으로
+        present = {m.id for m in humans(room)}
+        here = [p for p in parts if p["id"] in present]
+        away = [p for p in parts if p["id"] not in present]
+    else:
+        here, away = parts, []
+    here = here[:recruit_card.MAX_SLOTS]
+    away = away[:max(recruit_card.MAX_SLOTS - len(here), 0)]
+    if guild:
+        members = await asyncio.gather(*[_applicant_entry(guild, p) for p in here])
+        pending = await asyncio.gather(*[_applicant_entry(guild, p) for p in away])
+    else:
+        members, pending = [(p["name"], None) for p in here], [(p["name"], None) for p in away]
     icon = None
     entry = store.game(res["guild"], res.get("game"))
     if entry and entry.get("file") and os.path.exists(entry["file"]):
@@ -1634,7 +1658,7 @@ async def res_card_file(res: dict, status: str) -> discord.File:
     footer = {"open": "시작 10분 전에 참가자 알림 + 통화방 자동 생성", "full": "시작 10분 전에 참가자 알림 + 통화방 자동 생성",
               "started": None, "cancelled": None}[status]
     if status in ("open", "full") and res.get("room"):
-        footer = "통화방이 열렸어요! 아래 버튼으로 들어오세요"
+        footer = "통화방이 열렸어요! 흐린 사람은 아직 안 들어온 사람이에요"
     buf = await asyncio.to_thread(
         recruit_card.render_card,
         icon=icon,
@@ -1644,6 +1668,8 @@ async def res_card_file(res: dict, status: str) -> discord.File:
         voice_name="",
         target=res["target"],
         members=list(members),
+        applicants=list(pending),
+        remaining=res["target"] - len(res["participants"]),
         status=status,
         tags=[f"{time_text(res['start_at'])} 시작"] + res.get("tags", []),
         meta=f"주최 {res['author_name']}   ·   참가 버튼으로 신청",
@@ -1651,6 +1677,13 @@ async def res_card_file(res: dict, status: str) -> discord.File:
         custom_emojis=await custom_emoji_images(res["content"]),
     )
     return discord.File(buf, filename="reservation.png")
+
+
+def res_by_room(room_id: int):
+    for mid, res in store.data["reservations"].items():
+        if res.get("room") == room_id:
+            return mid, res
+    return None
 
 
 def res_status(res: dict) -> str:

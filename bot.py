@@ -18,6 +18,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import time
 from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
@@ -1198,6 +1199,60 @@ async def cmd_setup_game_add(interaction: discord.Interaction, 게임: app_comma
     await interaction.followup.send(f"**{name}** 게임을 아이콘과 함께 등록했어요.", ephemeral=True)
 
 
+async def source_guild_autocomplete(interaction: discord.Interaction, current: str):
+    out = []
+    for g in bot.guilds:
+        if g.id == interaction.guild_id or not store.games(g.id) or current.lower() not in g.name.lower():
+            continue
+        member = g.get_member(interaction.user.id)
+        if member is not None and not member.guild_permissions.manage_guild:
+            continue
+        out.append(app_commands.Choice(name=f"{g.name} (게임 {len(store.games(g.id))}개)"[:100], value=str(g.id)))
+    return out[:25]
+
+
+@setup_group.command(name="게임가져오기", description="다른 서버에 등록한 게임과 아이콘을 이 서버로 복사해요")
+@app_commands.describe(서버="가져올 서버 (두 서버 모두 서버 관리 권한이 있어야 해요)",
+                       덮어쓰기="이 서버에 이미 있는 게임도 아이콘을 바꿀지 (기본: 건너뜀)")
+@app_commands.autocomplete(서버=source_guild_autocomplete)
+async def cmd_setup_game_import(interaction: discord.Interaction, 서버: str, 덮어쓰기: bool = False):
+    source = bot.get_guild(int(서버)) if 서버.isdigit() else None
+    if source is None or source.id == interaction.guild.id:
+        await interaction.response.send_message("서버를 목록에서 골라 주세요.", ephemeral=True)
+        return
+    try:
+        member = source.get_member(interaction.user.id) or await source.fetch_member(interaction.user.id)
+    except discord.HTTPException:
+        member = None
+    if member is None or not member.guild_permissions.manage_guild:
+        await interaction.response.send_message(f"**{source.name}**에서 서버 관리 권한이 있어야 가져올 수 있어요.",
+                                                ephemeral=True)
+        return
+    gid = interaction.guild.id
+    added, updated, skipped = [], [], []
+    for entry in store.games(source.id).values():
+        name = entry["name"]
+        existing = store.game(gid, name)
+        if existing and not 덮어쓰기:
+            skipped.append(name)
+            continue
+        icon = existing.get("file") if existing else None
+        if entry.get("file") and os.path.exists(entry["file"]):
+            os.makedirs(ICON_DIR, exist_ok=True)
+            icon = os.path.join(ICON_DIR, f"{gid}_{hashlib.md5(game_key(name).encode()).hexdigest()[:12]}.png")
+            shutil.copyfile(entry["file"], icon)
+        store.set_game(gid, existing["name"] if existing else name, icon)
+        (updated if existing else added).append(name)
+    lines = []
+    if added:
+        lines.append(f"추가 {len(added)}개: {', '.join(added)}")
+    if updated:
+        lines.append(f"덮어씀 {len(updated)}개: {', '.join(updated)}")
+    if skipped:
+        lines.append(f"이미 있어서 건너뜀 {len(skipped)}개: {', '.join(skipped)}")
+    await interaction.response.send_message("\n".join(lines) or "가져올 게임이 없어요.", ephemeral=True)
+
+
 @setup_group.command(name="게임삭제", description="등록한 게임을 지워요")
 @app_commands.autocomplete(게임=game_autocomplete)
 async def cmd_setup_game_remove(interaction: discord.Interaction, 게임: str):
@@ -1545,6 +1600,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
         ]))
         admin.add_field(name="게임·구인", inline=False, value="\n".join([
             f"{cmd('통화방설정 게임추가')} 게임 등록 (아이콘 첨부 가능)",
+            f"{cmd('통화방설정 게임가져오기')} 다른 서버의 게임·아이콘 복사",
             f"{cmd('통화방설정 게임역할')} 게임에 역할 연결 (구인 시 자동 멘션)",
             f"{cmd('통화방설정 게임삭제')} 게임 삭제",
             f"{cmd('통화방설정 구인채널')} 구인 글이 올라갈 채널",

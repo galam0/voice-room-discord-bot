@@ -145,6 +145,22 @@ class Store:
         self.guild(guild_id)["recruit"] = channel_id
         self.save()
 
+    # 방이 생길 카테고리 (서버 기본값)
+    def room_category(self, guild_id: int):
+        return self.guild(guild_id).get("room_category")
+
+    def set_room_category(self, guild_id: int, category_id):
+        self.guild(guild_id)["room_category"] = category_id
+        self.save()
+
+    def set_hub_category(self, guild_id: int, hub_id: int, category_id) -> bool:
+        hub = self.hubs(guild_id).get(str(hub_id))
+        if hub is None:
+            return False
+        hub["category"] = category_id
+        self.save()
+        return True
+
     # 구인 글 (음성 채널 하나당 글 하나)
     def post(self, voice_id: int):
         return self.data["posts"].get(str(voice_id))
@@ -232,9 +248,21 @@ def first_hub_category(guild: discord.Guild):
     return None
 
 
+def configured_category(guild: discord.Guild, category_id):
+    ch = guild.get_channel(category_id) if category_id else None
+    return ch if isinstance(ch, discord.CategoryChannel) else None
+
+
+def hub_room_category(guild: discord.Guild, hub_channel, hub_cfg: dict):
+    """생성 채널로 만든 방의 카테고리: 그 생성 채널 전용 > 서버 기본 > 생성 채널이 있는 카테고리."""
+    return (configured_category(guild, hub_cfg.get("category"))
+            or configured_category(guild, store.room_category(guild.id))
+            or hub_channel.category)
+
+
 def pick_category(guild: discord.Guild, member: discord.Member, fallback):
-    """새 방을 만들 카테고리: 생성 채널 카테고리 > 지금 있는 음성 채널 카테고리 > 명령어 친 채널 카테고리."""
-    category = first_hub_category(guild)
+    """명령어로 만든 방의 카테고리: 서버 기본 > 생성 채널 카테고리 > 지금 있는 음성 채널 > 명령어 친 채널."""
+    category = configured_category(guild, store.room_category(guild.id)) or first_hub_category(guild)
     if category:
         return category
     if member.voice and member.voice.channel and member.voice.channel.category:
@@ -686,7 +714,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             created = room is None
             if created:
                 try:
-                    room = await create_room(member, after.channel.category,
+                    room = await create_room(member, hub_room_category(guild, after.channel, hub),
                                              limit=hub.get("limit", 0), game=hub.get("game"))
                 except discord.HTTPException as e:
                     log.warning("방 생성 실패: %s", e)
@@ -743,6 +771,12 @@ async def on_guild_channel_delete(channel):
     store.remove_hub(channel.guild.id, channel.id)
     if store.recruit_channel(channel.guild.id) == channel.id:
         store.set_recruit_channel(channel.guild.id, None)
+    if store.room_category(channel.guild.id) == channel.id:
+        store.set_room_category(channel.guild.id, None)
+    for hub in store.hubs(channel.guild.id).values():
+        if hub.get("category") == channel.id:
+            hub["category"] = None
+            store.save()
 
 
 # ─────────────────────────────── 게임 자동완성 ───────────────────────────────
@@ -968,6 +1002,8 @@ async def cmd_setup_list(interaction: discord.Interaction):
         detail = cfg.get("game") or "일반"
         if cfg.get("limit"):
             detail += f", {cfg['limit']}명"
+        if cfg.get("category"):
+            detail += f", 📁 <#{cfg['category']}>"
         hub_lines.append(f"<#{cid}> ({detail})")
     game_lines = [f"{e['name']}{' 🖼️' if e.get('file') else ''}" for e in store.games(gid).values()]
     recruit = store.recruit_channel(gid)
@@ -976,7 +1012,34 @@ async def cmd_setup_list(interaction: discord.Interaction):
     embed.add_field(name="등록된 게임 (🖼️ = 아이콘 있음)",
                     value=", ".join(sorted(game_lines)) or "없음 (`/통화방설정 게임추가`)", inline=False)
     embed.add_field(name="구인 채널", value=f"<#{recruit}>" if recruit else "명령어 친 채널", inline=False)
+    room_cat = store.room_category(gid)
+    embed.add_field(name="방 카테고리 (기본)", value=f"📁 <#{room_cat}>" if room_cat else "생성 채널이 있는 카테고리",
+                    inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@setup_group.command(name="카테고리", description="통화방이 만들어질 카테고리를 정해요")
+@app_commands.describe(카테고리="방이 만들어질 카테고리 (비우면 기본값으로 되돌림)",
+                       생성채널="이 생성 채널로 만든 방에만 적용 (비우면 서버 전체 기본값)")
+async def cmd_setup_category(interaction: discord.Interaction, 카테고리: discord.CategoryChannel | None = None,
+                             생성채널: discord.VoiceChannel | None = None):
+    gid = interaction.guild.id
+    cat_id = 카테고리.id if 카테고리 else None
+    if 생성채널:
+        if not store.set_hub_category(gid, 생성채널.id, cat_id):
+            await interaction.response.send_message(f"{생성채널.mention}은(는) 생성 채널이 아니에요.", ephemeral=True)
+            return
+        msg = (f"{생성채널.mention}으로 만든 방은 이제 📁 **{카테고리.name}** 카테고리에 생겨요." if 카테고리
+               else f"{생성채널.mention} 전용 카테고리를 해제했어요. 서버 기본 카테고리를 따라가요.")
+    else:
+        store.set_room_category(gid, cat_id)
+        msg = (f"통화방은 이제 기본으로 📁 **{카테고리.name}** 카테고리에 생겨요." if 카테고리
+               else "기본 카테고리를 해제했어요. 생성 채널이 있는 카테고리에 방이 생겨요.")
+    if 카테고리:
+        perms = 카테고리.permissions_for(interaction.guild.me)
+        if not (perms.manage_channels and perms.move_members):
+            msg += "\n⚠️ 봇이 이 카테고리에서 '채널 관리'나 '멤버 이동' 권한이 없어요. 카테고리 권한을 확인해 주세요."
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 @setup_group.command(name="구인채널", description="구인 글이 올라갈 채팅 채널을 정해요 (안 정하면 명령어 친 채널)")

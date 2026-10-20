@@ -1040,26 +1040,23 @@ async def cmd_setup_game_remove(interaction: discord.Interaction, 게임: str):
 
 
 # ─────────────────────────────── /구인 ───────────────────────────────
-# 게임별 티어·포지션 자동완성 추천 (직접 입력도 가능, 예: 골드~플래)
+# 게임별 티어 자동완성 추천 (직접 입력도 가능, 예: 골드~플래)
 GAME_PRESETS = [
     (("롤", "리그오브레전드", "leagueoflegends", "lol"),
-     ["아이언", "브론즈", "실버", "골드", "플래티넘", "에메랄드", "다이아몬드", "마스터", "그랜드마스터", "챌린저"],
-     ["탑", "정글", "미드", "원딜", "서폿", "상관없음"]),
+     ["아이언", "브론즈", "실버", "골드", "플래티넘", "에메랄드", "다이아몬드", "마스터", "그랜드마스터", "챌린저"]),
     (("발로", "valorant"),
-     ["아이언", "브론즈", "실버", "골드", "플래티넘", "다이아몬드", "초월자", "불멸", "레디언트"],
-     ["타격대", "척후대", "감시자", "전략가", "상관없음"]),
+     ["아이언", "브론즈", "실버", "골드", "플래티넘", "다이아몬드", "초월자", "불멸", "레디언트"]),
     (("옵치", "오버워치", "overwatch"),
-     ["브론즈", "실버", "골드", "플래티넘", "다이아몬드", "마스터", "그랜드마스터", "챔피언"],
-     ["탱커", "딜러", "힐러", "상관없음"]),
+     ["브론즈", "실버", "골드", "플래티넘", "다이아몬드", "마스터", "그랜드마스터", "챔피언"]),
 ]
 
 
-def preset_for(game: str | None):
+def tiers_for(game: str | None):
     key = game_key(game or "")
-    for names, tiers, positions in GAME_PRESETS:
+    for names, tiers in GAME_PRESETS:
         if any(n in key for n in names):
-            return tiers, positions
-    return [], []
+            return tiers
+    return []
 
 
 def current_game(interaction: discord.Interaction):
@@ -1087,11 +1084,7 @@ def suggest(options: list[str], current: str):
 
 
 async def tier_autocomplete(interaction: discord.Interaction, current: str):
-    return suggest(preset_for(current_game(interaction))[0], current)
-
-
-async def position_autocomplete(interaction: discord.Interaction, current: str):
-    return suggest(preset_for(current_game(interaction))[1], current)
+    return suggest(tiers_for(current_game(interaction)), current)
 
 
 @bot.tree.command(name="구인", description="지금 있는 통화방으로 같이 할 사람을 구해요")
@@ -1101,14 +1094,12 @@ async def position_autocomplete(interaction: discord.Interaction, current: str):
     인원="몇 명 더 구할지",
     게임="등록된 게임 중에서 고르기 (게임 방이면 자동으로 채워져요)",
     티어="예: 골드, 골드~플래 (선택)",
-    포지션="예: 정글, 감시자, 힐러 (선택)",
     멘션역할="알림 보낼 역할 (선택)",
 )
-@app_commands.autocomplete(게임=game_autocomplete, 티어=tier_autocomplete, 포지션=position_autocomplete)
+@app_commands.autocomplete(게임=game_autocomplete, 티어=tier_autocomplete)
 async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Range[str, 1, 300],
                       인원: app_commands.Range[int, 1, 20], 게임: str | None = None,
                       티어: app_commands.Range[str, 1, 30] | None = None,
-                      포지션: app_commands.Range[str, 1, 30] | None = None,
                       멘션역할: discord.Role | None = None):
     member = interaction.user
     voice = member.voice.channel if member.voice and member.voice.channel else existing_room(interaction.guild, member)
@@ -1134,7 +1125,7 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     current = len(humans(voice))
     info = {"voice": voice.id, "voice_name": voice.name, "author": member.id, "guild": interaction.guild.id,
             "author_name": member.display_name, "content": 내용, "game": game, "target": current + 인원,
-            "tags": [t.strip() for t in (티어, 포지션) if t and t.strip()], "applicants": [],
+            "tags": [티어.strip()] if 티어 and 티어.strip() else [], "applicants": [],
             "expires_at": time.time() + RECRUIT_EXPIRE_HOURS * 3600 if RECRUIT_EXPIRE_HOURS > 0 else None}
     header = f"{멘션역할.mention} " if 멘션역할 else ""
     try:

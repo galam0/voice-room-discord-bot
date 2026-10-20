@@ -1129,32 +1129,6 @@ async def cmd_setup_list(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@setup_group.command(name="자동역할", description="서버에 들어온 사람에게 자동으로 줄 역할 (다시 고르면 빠져요)")
-@app_commands.describe(역할="추가하거나 뺄 역할")
-async def cmd_setup_auto_role(interaction: discord.Interaction, 역할: discord.Role):
-    if not bot.intents.members:
-        await interaction.response.send_message(
-            "자동 역할을 쓰려면 먼저 설정이 필요해요.\n"
-            "1. 디스코드 개발자 포털 → 봇 → Bot → **Server Members Intent** 켜기\n"
-            "2. VM의 `.env`에 `MEMBERS_INTENT=1` 한 줄 추가 후 봇 재시작", ephemeral=True)
-        return
-    problem = role_problem(interaction.guild, 역할)
-    if problem:
-        await interaction.response.send_message(problem, ephemeral=True)
-        return
-    roles = store.guild(interaction.guild.id).setdefault("auto_roles", [])
-    if 역할.id in roles:
-        roles.remove(역할.id)
-        msg = f"{역할.mention} 자동 역할을 뺐어요."
-    else:
-        roles.append(역할.id)
-        msg = f"{역할.mention} 자동 역할로 넣었어요."
-    store.save()
-    current = " ".join(f"<@&{r}>" for r in roles) or "없음"
-    await interaction.response.send_message(f"{msg}\n지금 자동 역할: {current}", ephemeral=True,
-                                            allowed_mentions=discord.AllowedMentions.none())
-
-
 @setup_group.command(name="카테고리", description="통화방이 만들어질 카테고리를 정해요")
 @app_commands.describe(카테고리="방이 만들어질 카테고리 (비우면 기본값으로 되돌림)",
                        생성채널="이 생성 채널로 만든 방에만 적용 (비우면 서버 전체 기본값)")
@@ -1592,6 +1566,74 @@ async def cmd_menu_remove(interaction: discord.Interaction, 메뉴: str, 이모�
     await interaction.followup.send(f"{emoji} 을(를) 뺐어요.", ephemeral=True)
 
 
+# ─────────────────────────────── /자동역할 ───────────────────────────────
+auto_role_group = app_commands.Group(
+    name="자동역할", description="서버에 들어온 사람에게 자동으로 주는 역할 (관리자)", guild_only=True,
+    default_permissions=discord.Permissions(manage_roles=True),
+)
+MEMBERS_INTENT_HELP = ("자동 역할을 쓰려면 먼저 설정이 필요해요.\n"
+                       "1. 디스코드 개발자 포털 → 봇 → Bot → **Server Members Intent** 켜기\n"
+                       "2. VM의 `.env`에 `MEMBERS_INTENT=1` 한 줄 추가 후 봇 재시작")
+
+
+def auto_roles(guild_id: int) -> list:
+    return store.guild(guild_id).setdefault("auto_roles", [])
+
+
+@auto_role_group.command(name="목록", description="자동 역할 목록을 봐요")
+async def cmd_auto_role_list(interaction: discord.Interaction):
+    roles = auto_roles(interaction.guild.id)
+    text = "\n".join(f"<@&{r}>" for r in roles) or "없음"
+    if not bot.intents.members:
+        text += "\n\n⚠️ " + MEMBERS_INTENT_HELP
+    await interaction.response.send_message(embed=discord.Embed(title="자동 역할", description=text,
+                                                                color=discord.Color.blurple()), ephemeral=True)
+
+
+@auto_role_group.command(name="추가", description="자동 역할을 추가해요")
+async def cmd_auto_role_add(interaction: discord.Interaction, 역할: discord.Role):
+    if not bot.intents.members:
+        await interaction.response.send_message(MEMBERS_INTENT_HELP, ephemeral=True)
+        return
+    problem = role_problem(interaction.guild, 역할)
+    if problem:
+        await interaction.response.send_message(problem, ephemeral=True)
+        return
+    roles = auto_roles(interaction.guild.id)
+    if 역할.id in roles:
+        await interaction.response.send_message(f"{역할.mention}은(는) 이미 자동 역할이에요.", ephemeral=True,
+                                                allowed_mentions=discord.AllowedMentions.none())
+        return
+    roles.append(역할.id)
+    store.save()
+    await interaction.response.send_message(f"{역할.mention} 추가했어요.", ephemeral=True,
+                                            allowed_mentions=discord.AllowedMentions.none())
+
+
+async def auto_role_autocomplete(interaction: discord.Interaction, current: str):
+    out = []
+    for rid in auto_roles(interaction.guild_id):
+        role = interaction.guild.get_role(rid)
+        name = role.name if role else f"(삭제된 역할 {rid})"
+        if current.lower() in name.lower():
+            out.append(app_commands.Choice(name=name[:100], value=str(rid)))
+    return out[:25]
+
+
+@auto_role_group.command(name="빼기", description="자동 역할을 빼요")
+@app_commands.autocomplete(역할=auto_role_autocomplete)
+async def cmd_auto_role_remove(interaction: discord.Interaction, 역할: str):
+    roles = auto_roles(interaction.guild.id)
+    rid = int(역할) if 역할.isdigit() else None
+    if rid not in roles:
+        await interaction.response.send_message("목록에서 골라 주세요.", ephemeral=True)
+        return
+    roles.remove(rid)
+    store.save()
+    await interaction.response.send_message(f"<@&{rid}> 뺐어요.", ephemeral=True,
+                                            allowed_mentions=discord.AllowedMentions.none())
+
+
 # ─────────────────────────────── /도움말 ───────────────────────────────
 COMMAND_IDS: dict[str, int] = {}
 
@@ -1647,13 +1689,15 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
             f"{cmd('통화방설정 게임역할')} 게임에 역할 연결 (구인 시 자동 멘션)",
             f"{cmd('통화방설정 게임삭제')} 게임 삭제",
             f"{cmd('통화방설정 구인채널')} 구인 글이 올라갈 채널",
-            f"{cmd('통화방설정 자동역할')} 들어온 사람에게 자동으로 줄 역할",
             f"{cmd('통화방설정 목록')} 지금 설정 한눈에 보기",
         ]))
         admin.add_field(name="역할 메뉴 (이모지 → 역할)", inline=False, value="\n".join([
             f"{cmd('역할메뉴 만들기')} 역할 메뉴 글 올리기",
             f"{cmd('역할메뉴 추가')} 이모지와 역할 넣기",
             f"{cmd('역할메뉴 빼기')} 이모지 빼기 (글을 지우면 메뉴도 사라져요)",
+        ]))
+        admin.add_field(name="자동 역할", inline=False, value="\n".join([
+            f"{cmd('자동역할 목록')} · {cmd('자동역할 추가')} · {cmd('자동역할 빼기')}",
         ]))
         admin.add_field(name="추첨 (🎉 반응)", inline=False, value="\n".join([
             f"{cmd('추첨 시작')} 추첨 글 올리기",
@@ -2204,6 +2248,7 @@ bot.tree.add_command(room_group)
 bot.tree.add_command(setup_group)
 bot.tree.add_command(menu_group)
 bot.tree.add_command(giveaway_group)
+bot.tree.add_command(auto_role_group)
 
 if __name__ == "__main__":
     if not TOKEN:

@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -549,6 +550,25 @@ async def _applicant_entry(guild: discord.Guild, applicant: dict):
     return member.display_name, await _avatar_bytes(member)
 
 
+CUSTOM_EMOJI_RE = re.compile(r"<a?:\w{2,32}:(\d{15,25})>")
+_custom_emoji_cache: dict[str, bytes | None] = {}
+
+
+async def custom_emoji_images(text: str) -> dict:
+    """내용에 들어 있는 서버 이모지 그림을 디스코드에서 받아 옴 (한 번 받으면 기억)."""
+    out = {}
+    for eid in set(CUSTOM_EMOJI_RE.findall(text or "")):
+        if eid not in _custom_emoji_cache:
+            try:
+                _custom_emoji_cache[eid] = await asyncio.wait_for(
+                    bot.http.get_from_cdn(f"https://cdn.discordapp.com/emojis/{eid}.png?size=96"), timeout=5)
+            except Exception:
+                _custom_emoji_cache[eid] = None
+        if _custom_emoji_cache[eid]:
+            out[eid] = _custom_emoji_cache[eid]
+    return out
+
+
 async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.File:
     """구인 글 이미지를 만들어 discord.File로 돌려줌."""
     members = humans(voice) if voice else []
@@ -582,6 +602,7 @@ async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.
         applicants=list(applicants),
         tags=info.get("tags"),
         footer=None if closed else expire_text(info),
+        custom_emojis=await custom_emoji_images(info["content"]),
         status=status,
     )
     return discord.File(buf, filename="recruit.png")

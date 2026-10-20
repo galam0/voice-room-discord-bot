@@ -71,7 +71,7 @@ VM에 SSH로 접속해서:
 cd ~
 git clone https://github.com/galam0/voice-room-discord-bot.git voice-room-bot
 cd ~/voice-room-bot
-sudo apt install -y python3-venv fonts-noto-cjk   # 구인 이미지에 쓸 한글 폰트 포함
+sudo apt install -y python3-venv fonts-noto-cjk fonts-noto-color-emoji   # 구인 이미지용 한글·이모지 폰트
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 cp .env.example .env

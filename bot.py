@@ -20,6 +20,8 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
+import recruit_card
+
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -216,21 +218,36 @@ async def schedule_empty_check(channel_id: int):
 
 
 # ─────────────────────────────── 구인구직 ───────────────────────────────
-def recruit_embed(info: dict, current: int, closed: bool = False) -> discord.Embed:
-    full = current >= info["target"]
+async def _avatar_bytes(member: discord.Member):
+    try:
+        asset = member.display_avatar.replace(size=128, static_format="png")
+        return await asyncio.wait_for(asset.read(), timeout=5)
+    except Exception:
+        return None
+
+
+async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.File:
+    """구인 글 이미지를 만들어 discord.File로 돌려줌."""
+    members = humans(voice) if voice else []
+    members.sort(key=lambda m: m.id != info["author"])  # 구인자가 맨 앞
+    avatars = await asyncio.gather(*[_avatar_bytes(m) for m in members[:recruit_card.MAX_SLOTS]])
     if closed:
-        status, color = "⛔ 마감", discord.Color.dark_grey()
-    elif full:
-        status, color = "✅ 모집 완료", discord.Color.green()
+        status = "closed"
+    elif len(members) >= info["target"]:
+        status = "full"
     else:
-        status, color = f"🟢 모집 중 ({info['target'] - current}명 더)", discord.Color.blurple()
-    title = f"🎮 {info['game']} 구인" if info.get("game") else "📢 같이 할 사람 구해요"
-    embed = discord.Embed(title=("[마감] " if closed else "") + title, description=info["content"], color=color)
-    embed.add_field(name="통화방", value=f"<#{info['voice']}>")
-    embed.add_field(name="인원", value=f"{current} / {info['target']}")
-    embed.add_field(name="상태", value=status)
-    embed.set_footer(text="구인자만 마감할 수 있어요")
-    return embed
+        status = "open"
+    buf = await asyncio.to_thread(
+        recruit_card.render_card,
+        title=info.get("game") or "구인",
+        content=info["content"],
+        author=info["author_name"],
+        voice_name=voice.name if voice else info["voice_name"],
+        target=info["target"],
+        members=[(m.display_name, a) for m, a in zip(members, avatars)],
+        status=status,
+    )
+    return discord.File(buf, filename="recruit.png")
 
 
 def recruit_view(info: dict, jump_url: str | None) -> discord.ui.View:
@@ -266,7 +283,7 @@ async def refresh_post(voice_id: int):
         store.remove_post(voice_id)
         return
     try:
-        await msg.edit(embed=recruit_embed(info, len(humans(voice))))
+        await msg.edit(attachments=[await recruit_card_file(info, voice)])
     except discord.HTTPException:
         pass
 
@@ -280,9 +297,8 @@ async def close_post(voice_id: int):
     if msg is None:
         return
     voice = bot.get_channel(voice_id)
-    current = len(humans(voice)) if voice else 0
     try:
-        await msg.edit(embed=recruit_embed(info, current, closed=True), view=None)
+        await msg.edit(attachments=[await recruit_card_file(info, voice, closed=True)], view=None)
     except discord.HTTPException:
         pass
 
@@ -584,12 +600,13 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     await close_post(voice.id)
 
     current = len(humans(voice))
-    info = {"voice": voice.id, "author": member.id, "content": f"{member.mention}: {내용}",
-            "game": 게임, "target": current + 인원}
+    info = {"voice": voice.id, "voice_name": voice.name, "author": member.id,
+            "author_name": member.display_name, "content": 내용, "game": 게임, "target": current + 인원}
+    header = f"{멘션역할.mention} " if 멘션역할 else ""
     try:
         msg = await target.send(
-            content=멘션역할.mention if 멘션역할 else None,
-            embed=recruit_embed(info, current),
+            content=f"{header}{member.mention}님이 {voice.mention}에서 같이 할 사람을 구해요!",
+            file=await recruit_card_file(info, voice),
             view=recruit_view(info, voice.jump_url),
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )

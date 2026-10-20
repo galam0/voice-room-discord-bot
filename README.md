@@ -21,7 +21,7 @@
 | `/통화방설정 지정 <채널>` | (관리자) 기존 음성 채널을 생성 채널로 |
 | `/통화방설정 해제` | (관리자) 생성 채널 지정 해제 |
 
-구인 글에는 **🔊 통화방 들어가기** 버튼이 붙고, 통화방 인원이 바뀌면 `현재 / 목표` 인원이 자동으로 갱신돼요. 목표를 채우면 "모집 완료", 방이 비거나 사라지면 자동 마감.
+구인 글은 **이미지 카드**로 올라가고(참가자 프로필 사진, 빈 자리, 모집 상태 표시) **🔊 통화방 들어가기** 버튼이 붙어요. 통화방 인원이 바뀌면 이미지가 자동으로 다시 그려져요. 목표를 채우면 "모집 완료", 방이 비거나 사라지면 자동 마감.
 
 자동 기능: 빈 방 삭제 · 방장이 나가면 남은 사람에게 위임(기본 이름이면 새 방장 이름으로 바뀜) · 한 사람당 방 1개.
 
@@ -42,7 +42,7 @@ VM에 SSH로 접속해서:
 cd ~
 git clone https://github.com/galam0/voice-room-discord-bot.git voice-room-bot
 cd ~/voice-room-bot
-sudo apt install -y python3-venv   # 이미 있으면 건너뜀
+sudo apt install -y python3-venv fonts-noto-cjk   # 구인 이미지에 쓸 한글 폰트 포함
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 cp .env.example .env

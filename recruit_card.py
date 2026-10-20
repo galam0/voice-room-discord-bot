@@ -344,7 +344,8 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
                 members: list[tuple[str, bytes | None]], status: str, icon: bytes | None = None,
                 tags: list[str] | None = None, applicants: list[tuple[str, bytes | None]] | None = None,
                 footer: str | None = None, custom_emojis: dict | None = None,
-                meta: str | None = None, remaining: int | None = None) -> io.BytesIO:
+                meta: str | None = None, remaining: int | None = None,
+                count_pending: bool = False) -> io.BytesIO:
     """
     title: 게임 이름 (없으면 '구인')
     members: 통화방에 있는 사람 [(이름, 아바타 PNG 바이트 또는 None), ...]
@@ -355,6 +356,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     footer: 맨 아래 작은 글씨 (예: 자동 마감 시간)
     custom_emojis: 서버 이모지 {ID: 이미지 바이트}
     remaining: '모집 중 · N명 더'의 N (안 주면 target - members)
+    count_pending: True면 applicants도 인원 수에 넣고 '예정' 글자 없이 흐리게만 그림 (예약용)
     """
     tags = [t for t in (tags or []) if t]
     applicants = applicants or []
@@ -428,9 +430,9 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     f_label = font(26, True)
     d.text((PAD, y), "인원", font=f_label, fill=SUB)
     f_count = font(30, True)
-    count = f"{len(members)} / {target}"
+    count = f"{len(members) + (len(applicants) if count_pending else 0)} / {target}"
     d.text((W - PAD, y), count, font=f_count, fill=TEXT, anchor="ra")
-    if applicants:
+    if applicants and not count_pending:
         extra = f"+{len(applicants)} 예정   "
         d.text((W - PAD - text_w(d, count, f_count), y + 4), extra, font=font(24, True), fill=accent, anchor="ra")
     y += 34 + 20
@@ -452,7 +454,8 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
                 faded.putalpha(av.getchannel("A").point(lambda a: a * 45 // 100))
                 img.paste(faded, (int(x), int(sy)), faded)
                 d.ellipse((x, sy, x + SLOT, sy + SLOT), outline=accent, width=3)
-                pill(d, cx - 26, sy + SLOT - 22, "예정", f_badge, accent, pad_x=10, h=28)
+                if not count_pending:
+                    pill(d, cx - 26, sy + SLOT - 22, "예정", f_badge, accent, pad_x=10, h=28)
             else:
                 img.paste(av, (int(x), int(sy)), av)
                 if i == 0:  # 첫 번째 = 구인자

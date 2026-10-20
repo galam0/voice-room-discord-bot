@@ -1637,7 +1637,7 @@ async def res_card_file(res: dict, status: str) -> discord.File:
     guild = bot.get_guild(res["guild"])
     parts = sorted(res["participants"], key=lambda p: p["id"] != res["author"])  # 주최자가 맨 앞
     room = bot.get_channel(res["room"]) if res.get("room") and status in ("open", "full") else None
-    if room:  # 통화방이 열린 뒤: 들어온 사람은 진하게, 아직 안 온 사람은 '예정'으로
+    if room:  # 통화방이 열린 뒤: 들어온 사람은 진하게, 아직 안 온 사람은 흐리게
         present = {m.id for m in humans(room)}
         here = [p for p in parts if p["id"] in present]
         away = [p for p in parts if p["id"] not in present]
@@ -1670,6 +1670,7 @@ async def res_card_file(res: dict, status: str) -> discord.File:
         members=list(members),
         applicants=list(pending),
         remaining=res["target"] - len(res["participants"]),
+        count_pending=True,
         status=status,
         tags=[f"{time_text(res['start_at'])} 시작"] + res.get("tags", []),
         meta=f"주최 {res['author_name']}   ·   참가 버튼으로 신청",

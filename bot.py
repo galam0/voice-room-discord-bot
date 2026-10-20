@@ -16,10 +16,13 @@ import io
 import json
 import logging
 import os
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 import recruit_card
@@ -31,6 +34,9 @@ DATA_FILE = os.getenv("DATA_FILE", "data.json")
 ICON_DIR = os.getenv("ICON_DIR", "icons")
 # 명령어로 만든 방에 아무도 안 들어오면 이 시간(초) 뒤 삭제
 EMPTY_GRACE_SECONDS = int(os.getenv("EMPTY_GRACE_SECONDS", "60"))
+# 구인 글 자동 마감까지 시간(시간 단위, 0이면 자동 마감 안 함)
+RECRUIT_EXPIRE_HOURS = float(os.getenv("RECRUIT_EXPIRE_HOURS", "3"))
+TZ = ZoneInfo(os.getenv("BOT_TIMEZONE", "Asia/Seoul"))
 # 디스코드는 채널 이름 변경을 10분에 2번으로 제한함 → 오래 기다리지 않고 포기할 시간
 RENAME_TIMEOUT = 10
 
@@ -478,11 +484,35 @@ async def _avatar_bytes(member: discord.Member):
         return None
 
 
+def expire_text(info: dict):
+    if not info.get("expires_at"):
+        return None
+    t = datetime.fromtimestamp(info["expires_at"], TZ)
+    ampm = "오전" if t.hour < 12 else "오후"
+    hour = t.hour % 12 or 12
+    return f"{ampm} {hour}:{t.minute:02d}에 자동 마감돼요"
+
+
+async def _applicant_entry(guild: discord.Guild, applicant: dict):
+    member = guild.get_member(applicant["id"])
+    if member is None:
+        try:
+            member = await guild.fetch_member(applicant["id"])
+        except discord.HTTPException:
+            return applicant["name"], None
+    return member.display_name, await _avatar_bytes(member)
+
+
 async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.File:
     """구인 글 이미지를 만들어 discord.File로 돌려줌."""
     members = humans(voice) if voice else []
     members.sort(key=lambda m: m.id != info["author"])  # 구인자가 맨 앞
+    member_ids = {m.id for m in members}
+    pending = [a for a in info.get("applicants", []) if a["id"] not in member_ids]
     avatars = await asyncio.gather(*[_avatar_bytes(m) for m in members[:recruit_card.MAX_SLOTS]])
+    guild = bot.get_guild(info["guild"])
+    room_left = max(recruit_card.MAX_SLOTS - len(members), 0)
+    applicants = await asyncio.gather(*[_applicant_entry(guild, a) for a in pending[:room_left]]) if guild else []
     if closed:
         status = "closed"
     elif len(members) >= info["target"]:
@@ -503,6 +533,9 @@ async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.
         voice_name=voice.name if voice else info["voice_name"],
         target=info["target"],
         members=[(m.display_name, a) for m, a in zip(members, avatars)],
+        applicants=list(applicants),
+        tags=info.get("tags"),
+        footer=None if closed else expire_text(info),
         status=status,
     )
     return discord.File(buf, filename="recruit.png")
@@ -512,6 +545,8 @@ def recruit_view(info: dict, jump_url: str | None) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if jump_url:
         view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=jump_url))
+    view.add_item(discord.ui.Button(label="참가할게요", emoji="🙋", style=discord.ButtonStyle.primary,
+                                    custom_id=f"recruit_apply:{info['voice']}"))
     view.add_item(discord.ui.Button(label="마감", style=discord.ButtonStyle.danger,
                                     custom_id=f"recruit_close:{info['voice']}"))
     return view
@@ -536,6 +571,10 @@ async def refresh_post(voice_id: int):
     if voice is None or not humans(voice):
         await close_post(voice_id)
         return
+    ids = {m.id for m in voice.members}
+    if any(a["id"] in ids for a in info.get("applicants", [])):
+        info["applicants"] = [a for a in info["applicants"] if a["id"] not in ids]
+        store.set_post(voice_id, **info)
     msg = await fetch_post_message(info)
     if msg is None:
         store.remove_post(voice_id)
@@ -574,9 +613,52 @@ async def handle_recruit_close(interaction: discord.Interaction, voice_id: int):
     await close_post(voice_id)
 
 
+async def handle_recruit_apply(interaction: discord.Interaction, voice_id: int):
+    """참가할게요 버튼: 누르면 신청, 다시 누르면 취소."""
+    info = store.post(voice_id)
+    if not info:
+        await interaction.response.send_message("이미 마감된 구인 글이에요.", ephemeral=True)
+        return
+    user = interaction.user
+    voice = bot.get_channel(voice_id)
+    if user.id == info["author"]:
+        await interaction.response.send_message("구인자는 신청하지 않아도 돼요.", ephemeral=True)
+        return
+    if voice and user in voice.members:
+        await interaction.response.send_message("이미 통화방에 들어가 있어요.", ephemeral=True)
+        return
+    applicants = info.setdefault("applicants", [])
+    if any(a["id"] == user.id for a in applicants):
+        info["applicants"] = [a for a in applicants if a["id"] != user.id]
+        store.set_post(voice_id, **info)
+        await interaction.response.send_message("참가 신청을 취소했어요.", ephemeral=True)
+    else:
+        applicants.append({"id": user.id, "name": user.display_name})
+        store.set_post(voice_id, **info)
+        await interaction.response.send_message(
+            "참가 신청했어요! 준비되면 '통화방 들어가기'를 눌러 주세요. (다시 누르면 취소)", ephemeral=True)
+        if voice:
+            try:
+                await voice.send(f"🙋 {user.mention}님이 참가 신청했어요! <@{info['author']}>",
+                                 allowed_mentions=discord.AllowedMentions(users=True))
+            except discord.HTTPException:
+                pass
+    await refresh_post(voice_id)
+
+
+@tasks.loop(minutes=2)
+async def expire_posts():
+    now = time.time()
+    for vid, info in list(store.data["posts"].items()):
+        if info.get("expires_at") and info["expires_at"] <= now:
+            await close_post(int(vid))
+
+
 # ─────────────────────────────── 이벤트 ───────────────────────────────
 @bot.event
 async def on_ready():
+    if not expire_posts.is_running():
+        expire_posts.start()
     # 꺼져 있는 동안 비거나 사라진 방 정리
     for cid in list(store.data["rooms"].keys()):
         ch = bot.get_channel(int(cid))
@@ -641,7 +723,9 @@ async def on_interaction(interaction: discord.Interaction):
         return
     custom_id = (interaction.data or {}).get("custom_id", "")
     try:
-        if custom_id.startswith("recruit_close:"):
+        if custom_id.startswith("recruit_apply:"):
+            await handle_recruit_apply(interaction, int(custom_id.split(":")[1]))
+        elif custom_id.startswith("recruit_close:"):
             await handle_recruit_close(interaction, int(custom_id.split(":")[1]))
         elif custom_id.startswith("panel:"):
             _, action, cid = custom_id.split(":")
@@ -956,17 +1040,75 @@ async def cmd_setup_game_remove(interaction: discord.Interaction, 게임: str):
 
 
 # ─────────────────────────────── /구인 ───────────────────────────────
+# 게임별 티어·포지션 자동완성 추천 (직접 입력도 가능, 예: 골드~플래)
+GAME_PRESETS = [
+    (("롤", "리그오브레전드", "leagueoflegends", "lol"),
+     ["아이언", "브론즈", "실버", "골드", "플래티넘", "에메랄드", "다이아몬드", "마스터", "그랜드마스터", "챌린저"],
+     ["탑", "정글", "미드", "원딜", "서폿", "상관없음"]),
+    (("발로", "valorant"),
+     ["아이언", "브론즈", "실버", "골드", "플래티넘", "다이아몬드", "초월자", "불멸", "레디언트"],
+     ["타격대", "척후대", "감시자", "전략가", "상관없음"]),
+    (("옵치", "오버워치", "overwatch"),
+     ["브론즈", "실버", "골드", "플래티넘", "다이아몬드", "마스터", "그랜드마스터", "챔피언"],
+     ["탱커", "딜러", "힐러", "상관없음"]),
+]
+
+
+def preset_for(game: str | None):
+    key = game_key(game or "")
+    for names, tiers, positions in GAME_PRESETS:
+        if any(n in key for n in names):
+            return tiers, positions
+    return [], []
+
+
+def current_game(interaction: discord.Interaction):
+    game = getattr(interaction.namespace, "게임", None)
+    if game:
+        return game
+    member = interaction.user
+    if getattr(member, "voice", None) and member.voice.channel and store.room(member.voice.channel.id):
+        return store.room(member.voice.channel.id).get("game")
+    return None
+
+
+def suggest(options: list[str], current: str):
+    current = current.strip()
+    choices = []
+    if "~" in current:  # 범위 입력: "골드~" → "골드~플래티넘" ...
+        head, tail = current.split("~", 1)
+        higher = options[options.index(head) + 1:] if head in options else options
+        choices = [f"{head}~{o}" for o in higher if game_key(tail) in game_key(o)]
+    else:
+        choices = [o for o in options if game_key(current) in game_key(o)]
+    if current and current not in choices and not current.endswith("~"):
+        choices.append(current)  # 목록에 없는 것도 직접 입력 가능
+    return [app_commands.Choice(name=c[:100], value=c[:30]) for c in choices][:25]
+
+
+async def tier_autocomplete(interaction: discord.Interaction, current: str):
+    return suggest(preset_for(current_game(interaction))[0], current)
+
+
+async def position_autocomplete(interaction: discord.Interaction, current: str):
+    return suggest(preset_for(current_game(interaction))[1], current)
+
+
 @bot.tree.command(name="구인", description="지금 있는 통화방으로 같이 할 사람을 구해요")
 @app_commands.guild_only()
 @app_commands.describe(
-    내용="예: 경쟁 같이 하실 분, 골드~플래",
+    내용="예: 경쟁 같이 하실 분, 마이크 필수",
     인원="몇 명 더 구할지",
     게임="등록된 게임 중에서 고르기 (게임 방이면 자동으로 채워져요)",
+    티어="예: 골드, 골드~플래 (선택)",
+    포지션="예: 정글, 감시자, 힐러 (선택)",
     멘션역할="알림 보낼 역할 (선택)",
 )
-@app_commands.autocomplete(게임=game_autocomplete)
+@app_commands.autocomplete(게임=game_autocomplete, 티어=tier_autocomplete, 포지션=position_autocomplete)
 async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Range[str, 1, 300],
                       인원: app_commands.Range[int, 1, 20], 게임: str | None = None,
+                      티어: app_commands.Range[str, 1, 30] | None = None,
+                      포지션: app_commands.Range[str, 1, 30] | None = None,
                       멘션역할: discord.Role | None = None):
     member = interaction.user
     voice = member.voice.channel if member.voice and member.voice.channel else existing_room(interaction.guild, member)
@@ -991,7 +1133,9 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
 
     current = len(humans(voice))
     info = {"voice": voice.id, "voice_name": voice.name, "author": member.id, "guild": interaction.guild.id,
-            "author_name": member.display_name, "content": 내용, "game": game, "target": current + 인원}
+            "author_name": member.display_name, "content": 내용, "game": game, "target": current + 인원,
+            "tags": [t.strip() for t in (티어, 포지션) if t and t.strip()], "applicants": [],
+            "expires_at": time.time() + RECRUIT_EXPIRE_HOURS * 3600 if RECRUIT_EXPIRE_HOURS > 0 else None}
     header = f"{멘션역할.mention} " if 멘션역할 else ""
     try:
         msg = await target.send(

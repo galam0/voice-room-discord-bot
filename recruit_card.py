@@ -135,22 +135,31 @@ def game_icon(data: bytes | None, name: str, color):
 
 
 def render_card(*, title: str, content: str, author: str, voice_name: str, target: int,
-                members: list[tuple[str, bytes | None]], status: str, icon: bytes | None = None) -> io.BytesIO:
+                members: list[tuple[str, bytes | None]], status: str, icon: bytes | None = None,
+                tags: list[str] | None = None, applicants: list[tuple[str, bytes | None]] | None = None,
+                footer: str | None = None) -> io.BytesIO:
     """
     title: 게임 이름 (없으면 '구인')
-    members: [(이름, 아바타 PNG 바이트 또는 None), ...]
+    members: 통화방에 있는 사람 [(이름, 아바타 PNG 바이트 또는 None), ...]
+    applicants: 참가 신청한 사람 (아직 통화방엔 없음)
     status: 'open' | 'full' | 'closed'
     icon: 서버에서 등록한 게임 아이콘 이미지 바이트 (없으면 첫 글자 아이콘)
+    tags: 티어·포지션 같은 태그
+    footer: 맨 아래 작은 글씨 (예: 자동 마감 시간)
     """
+    tags = [t for t in (tags or []) if t]
+    applicants = applicants or []
     accent = COLORS[status]
     tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     f_title = font(44, True)
     lines = wrap(tmp, content, f_title, W - PAD * 2, 3)
 
-    slots = min(max(target, len(members)), MAX_SLOTS)
+    people = members + applicants
+    slots = min(max(target, len(people)), MAX_SLOTS)
     per_row = 8
     rows = (slots + per_row - 1) // per_row
-    height = PAD + ICON + 28 + len(lines) * 60 + 20 + 34 + 36 + 1 + 36 + 34 + 20 + rows * (SLOT + 46) + PAD - 10
+    height = (PAD + ICON + 28 + len(lines) * 60 + (20 + 44 if tags else 0) + 20 + 34 + 36 + 1 + 36 + 34 + 20
+              + rows * (SLOT + 46) + (44 if footer else 0) + PAD - 10)
 
     img = Image.new("RGB", (W, height), BG)
     d = ImageDraw.Draw(img)
@@ -177,6 +186,20 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
         d.text((PAD, y), line, font=f_title, fill=TEXT if status != "closed" else SUB)
         y += 60
 
+    # 티어·포지션 태그
+    if tags:
+        y += 20
+        x = PAD
+        f_tag = font(24, True)
+        for tag in tags:
+            tag = ellipsize(d, tag, f_tag, 360)
+            w = text_w(d, tag, f_tag) + 36
+            if x + w > W - PAD:
+                break
+            pill(d, x, y, tag, f_tag, PANEL, color=TEXT)
+            x += w + 12
+        y += 44
+
     # 구인자 · 통화방
     y += 20
     f_sub = font(26)
@@ -189,24 +212,38 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     # 인원
     f_label = font(26, True)
     d.text((PAD, y), "인원", font=f_label, fill=SUB)
+    f_count = font(30, True)
     count = f"{len(members)} / {target}"
-    d.text((W - PAD, y), count, font=font(30, True), fill=TEXT, anchor="ra")
+    d.text((W - PAD, y), count, font=f_count, fill=TEXT, anchor="ra")
+    if applicants:
+        extra = f"+{len(applicants)} 예정   "
+        d.text((W - PAD - text_w(d, count, f_count), y + 4), extra, font=font(24, True), fill=accent, anchor="ra")
     y += 34 + 20
 
     gap = (W - PAD * 2 - per_row * SLOT) / (per_row - 1)
     f_name = font(20)
+    f_badge = font(16, True)
     for i in range(slots):
         r, c = divmod(i, per_row)
         x = PAD + c * (SLOT + gap)
         sy = y + r * (SLOT + 46)
         cx = x + SLOT / 2
-        if i < len(members):
-            name, data = members[i]
-            img.paste(circle_avatar(data, name, SLOT, accent), (int(x), int(sy)),
-                      circle_avatar(data, name, SLOT, accent))
-            if i == 0:  # 첫 번째 = 구인자
-                d.ellipse((x - 3, sy - 3, x + SLOT + 3, sy + SLOT + 3), outline=(240, 178, 50), width=4)
-            d.text((cx, sy + SLOT + 10), ellipsize(d, name, f_name, SLOT + gap - 6), font=f_name, fill=TEXT, anchor="ma")
+        if i < len(people):
+            name, data = people[i]
+            av = circle_avatar(data, name, SLOT, accent)
+            pending = i >= len(members)
+            if pending:  # 참가 예정: 흐리게
+                faded = av.copy()
+                faded.putalpha(av.getchannel("A").point(lambda a: a * 45 // 100))
+                img.paste(faded, (int(x), int(sy)), faded)
+                d.ellipse((x, sy, x + SLOT, sy + SLOT), outline=accent, width=3)
+                pill(d, cx - 26, sy + SLOT - 22, "예정", f_badge, accent, pad_x=10, h=28)
+            else:
+                img.paste(av, (int(x), int(sy)), av)
+                if i == 0:  # 첫 번째 = 구인자
+                    d.ellipse((x - 3, sy - 3, x + SLOT + 3, sy + SLOT + 3), outline=(240, 178, 50), width=4)
+            d.text((cx, sy + SLOT + 10), ellipsize(d, name, f_name, SLOT + gap - 6), font=f_name,
+                   fill=SUB if pending else TEXT, anchor="ma")
         else:
             d.ellipse((x, sy, x + SLOT, sy + SLOT), outline=(78, 80, 88), width=3)
             d.text((cx, sy + SLOT / 2), "+", font=font(40), fill=MUTED, anchor="mm")
@@ -214,6 +251,9 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
 
     if target > MAX_SLOTS:
         d.text((W - PAD, y + rows * (SLOT + 46) - 10), f"외 {target - MAX_SLOTS}자리", font=f_name, fill=MUTED, anchor="rs")
+
+    if footer:
+        d.text((PAD, y + rows * (SLOT + 46) + 14), footer, font=font(22), fill=MUTED)
 
     if status == "closed":
         overlay = Image.new("RGBA", img.size, (30, 31, 34, 110))

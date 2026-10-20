@@ -573,7 +573,7 @@ def recruit_view(info: dict, jump_url: str | None) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if jump_url:
         view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=jump_url))
-    view.add_item(discord.ui.Button(label="참가할게요", emoji="🙋", style=discord.ButtonStyle.primary,
+    view.add_item(discord.ui.Button(label="참가", style=discord.ButtonStyle.primary,
                                     custom_id=f"recruit_apply:{info['voice']}"))
     view.add_item(discord.ui.Button(label="마감", style=discord.ButtonStyle.danger,
                                     custom_id=f"recruit_close:{info['voice']}"))
@@ -642,7 +642,7 @@ async def handle_recruit_close(interaction: discord.Interaction, voice_id: int):
 
 
 async def handle_recruit_apply(interaction: discord.Interaction, voice_id: int):
-    """참가할게요 버튼: 누르면 신청, 다시 누르면 취소."""
+    """참가 버튼: 누르면 신청, 다시 누르면 취소."""
     info = store.post(voice_id)
     if not info:
         await interaction.response.send_message("이미 마감된 구인 글이에요.", ephemeral=True)
@@ -1155,14 +1155,14 @@ async def tier_autocomplete(interaction: discord.Interaction, current: str):
 @app_commands.guild_only()
 @app_commands.describe(
     내용="예: 경쟁 같이 하실 분, 마이크 필수",
-    인원="몇 명 더 구할지",
+    인원="나 포함 최대 몇 명으로 할지 (예: 5)",
     게임="등록된 게임 중에서 고르기 (게임 방이면 자동으로 채워져요)",
     티어="예: 골드, 골드~플래 (선택)",
     멘션역할="알림 보낼 역할 (선택)",
 )
 @app_commands.autocomplete(게임=game_autocomplete, 티어=tier_autocomplete)
 async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Range[str, 1, 300],
-                      인원: app_commands.Range[int, 1, 20], 게임: str | None = None,
+                      인원: app_commands.Range[int, 2, 20], 게임: str | None = None,
                       티어: app_commands.Range[str, 1, 30] | None = None,
                       멘션역할: discord.Role | None = None):
     member = interaction.user
@@ -1182,13 +1182,18 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
         await interaction.response.send_message("구인 글을 올릴 채널을 찾지 못했어요. 관리자에게 `/통화방설정 구인채널`을 부탁해 주세요.", ephemeral=True)
         return
 
+    current = len(humans(voice))
+    if 인원 <= current:
+        await interaction.response.send_message(
+            f"지금 {voice.mention}에 이미 {current}명이 있어요. 인원은 {current + 1}명 이상으로 정해 주세요.", ephemeral=True)
+        return
+
     await interaction.response.defer(ephemeral=True)
     # 같은 통화방의 이전 구인 글은 마감
     await close_post(voice.id)
 
-    current = len(humans(voice))
     info = {"voice": voice.id, "voice_name": voice.name, "author": member.id, "guild": interaction.guild.id,
-            "author_name": member.display_name, "content": 내용, "game": game, "target": current + 인원,
+            "author_name": member.display_name, "content": 내용, "game": game, "target": 인원,
             "tags": [티어.strip()] if 티어 and 티어.strip() else [], "applicants": [],
             "expires_at": time.time() + RECRUIT_EXPIRE_HOURS * 3600 if RECRUIT_EXPIRE_HOURS > 0 else None}
     header = f"{멘션역할.mention} " if 멘션역할 else ""
@@ -1236,7 +1241,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
     ]))
     recruit = discord.Embed(title="📢 구인구직", color=discord.Color.green(), description=(
         "통화방에 들어가 있는 상태에서 쓰면 그 방으로 같이 할 사람을 구하는 **이미지 글**이 올라가요. "
-        "🔊 버튼으로 바로 입장, 🙋 버튼으로 참가 신청을 할 수 있어요. 인원이 바뀌면 이미지가 갱신되고, "
+        "🔊 버튼으로 바로 입장, 참가 버튼으로 참가 신청을 할 수 있어요. 인원이 바뀌면 이미지가 갱신되고, "
         "방이 비거나 시간이 지나면 자동으로 마감돼요."
     ))
     recruit.add_field(name="명령어", inline=False, value="\n".join([

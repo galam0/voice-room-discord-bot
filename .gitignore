@@ -1,0 +1,6 @@
+.env
+data.json
+data.json.tmp
+venv/
+__pycache__/
+*.pyc

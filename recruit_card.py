@@ -20,8 +20,11 @@ COLORS = {
     "open": (88, 101, 242),    # 모집 중
     "full": (35, 165, 90),     # 모집 완료
     "closed": (128, 132, 142), # 마감
+    "started": (35, 165, 90),  # 예약 시작
+    "cancelled": (128, 132, 142),  # 예약 취소
 }
-STATUS_TEXT = {"open": "모집 중", "full": "모집 완료", "closed": "마감"}
+STATUS_TEXT = {"open": "모집 중", "full": "모집 완료", "closed": "마감", "started": "시작됨", "cancelled": "취소됨"}
+FADED = ("closed", "cancelled")  # 흐리게 그리는 상태
 
 # 한글 폰트 후보 (VM에는 `sudo apt install fonts-noto-cjk` 또는 fonts-nanum)
 FONT_CANDIDATES = {
@@ -340,7 +343,8 @@ def game_icon(data: bytes | None, name: str, color):
 def render_card(*, title: str, content: str, author: str, voice_name: str, target: int,
                 members: list[tuple[str, bytes | None]], status: str, icon: bytes | None = None,
                 tags: list[str] | None = None, applicants: list[tuple[str, bytes | None]] | None = None,
-                footer: str | None = None, custom_emojis: dict | None = None) -> io.BytesIO:
+                footer: str | None = None, custom_emojis: dict | None = None,
+                meta: str | None = None) -> io.BytesIO:
     """
     title: 게임 이름 (없으면 '구인')
     members: 통화방에 있는 사람 [(이름, 아바타 PNG 바이트 또는 None), ...]
@@ -392,7 +396,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     d.rounded_rectangle((PAD, y, PAD + 8, y + box_h), radius=4, fill=accent)
     ty = y + 14
     for line in lines:
-        rich_draw(img, d, (PAD + 36, ty), line, f_title, TEXT if status != "closed" else SUB)
+        rich_draw(img, d, (PAD + 36, ty), line, f_title, TEXT if status not in FADED else SUB)
         ty += 60
     y += box_h
 
@@ -413,7 +417,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     # 구인자 · 통화방
     y += 20
     f_sub = font(26)
-    meta = f"구인자 {author}   ·   음성 {voice_name}"
+    meta = meta or f"구인자 {author}   ·   음성 {voice_name}"
     rich_draw(img, d, (PAD, y), rich_ellipsize(d, atoms(meta), f_sub, W - PAD * 2), f_sub, SUB)
     y += 34 + 36
     d.line((PAD, y, W - PAD, y), fill=(63, 65, 71), width=2)
@@ -465,7 +469,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     if footer:
         d.text((PAD, y + rows * (SLOT + 46) + 14), footer, font=font(22), fill=MUTED)
 
-    if status == "closed":
+    if status in FADED:
         overlay = Image.new("RGBA", img.size, (30, 31, 34, 110))
         img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 

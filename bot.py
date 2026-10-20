@@ -18,7 +18,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 import discord
@@ -64,11 +64,11 @@ class Store:
 
     def __init__(self, path: str):
         self.path = path
-        self.data = {"guilds": {}, "rooms": {}, "posts": {}, "menus": {}}
+        self.data = {"guilds": {}, "rooms": {}, "posts": {}, "menus": {}, "reservations": {}}
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 self.data = json.load(f)
-        for key in ("guilds", "rooms", "posts", "menus"):
+        for key in ("guilds", "rooms", "posts", "menus", "reservations"):
             self.data.setdefault(key, {})
         self._migrate()
 
@@ -207,6 +207,18 @@ class Store:
         if self.data["menus"].pop(str(message_id), None) is not None:
             self.save()
 
+    # 예약 {메시지ID: {...}}
+    def res(self, message_id):
+        return self.data["reservations"].get(str(message_id))
+
+    def set_res(self, message_id, res: dict):
+        self.data["reservations"][str(message_id)] = res
+        self.save()
+
+    def remove_res(self, message_id):
+        if self.data["reservations"].pop(str(message_id), None) is not None:
+            self.save()
+
 
 store = Store(DATA_FILE)
 
@@ -326,9 +338,9 @@ async def transfer_owner(channel: discord.VoiceChannel, new_owner: discord.Membe
         asyncio.create_task(try_rename(channel, default_name(new_owner, room.get("game"))))
 
 
-async def schedule_empty_check(channel_id: int):
+async def schedule_empty_check(channel_id: int, delay: float | None = None):
     """명령어로 만들고 아무도 안 들어온 방 정리."""
-    await asyncio.sleep(EMPTY_GRACE_SECONDS)
+    await asyncio.sleep(EMPTY_GRACE_SECONDS if delay is None else delay)
     ch = bot.get_channel(channel_id)
     if ch and store.room(channel_id) and not humans(ch):
         await delete_room(ch, "아무도 들어오지 않은 통화방")
@@ -726,6 +738,8 @@ async def expire_posts():
 async def on_ready():
     if not expire_posts.is_running():
         expire_posts.start()
+    if not reservation_tick.is_running():
+        reservation_tick.start()
     # 꺼져 있는 동안 비거나 사라진 방 정리
     for cid in list(store.data["rooms"].keys()):
         ch = bot.get_channel(int(cid))
@@ -791,7 +805,11 @@ async def on_interaction(interaction: discord.Interaction):
         return
     custom_id = (interaction.data or {}).get("custom_id", "")
     try:
-        if custom_id.startswith("recruit_apply:"):
+        if custom_id.startswith("res_join:"):
+            await handle_res_join(interaction, int(custom_id.split(":")[1]))
+        elif custom_id.startswith("res_cancel:"):
+            await handle_res_cancel(interaction, int(custom_id.split(":")[1]))
+        elif custom_id.startswith("recruit_apply:"):
             await handle_recruit_apply(interaction, int(custom_id.split(":")[1]))
         elif custom_id.startswith("recruit_close:"):
             await handle_recruit_close(interaction, int(custom_id.split(":")[1]))
@@ -817,6 +835,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 @bot.event
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     store.remove_menu(payload.message_id)
+    store.remove_res(payload.message_id)
 
 
 @bot.event
@@ -1502,6 +1521,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
     recruit.add_field(name="명령어", inline=False, value="\n".join([
         f"{cmd('구인')} 구인 글 올리기 (게임·티어는 목록에서, 멘션역할로 알림)",
         f"{cmd('구인마감')} 내 구인 글 마감하기",
+        f"{cmd('예약')} 시간 정해서 모으기 (내전 등, 10분 전 알림 + 통화방 자동 생성)",
     ]))
     embeds = [room, recruit]
     if is_admin:
@@ -1549,6 +1569,289 @@ async def cmd_recruit_close(interaction: discord.Interaction):
     for vid in mine:
         await close_post(vid)
     await interaction.followup.send("구인을 마감했어요.", ephemeral=True)
+
+
+# ─────────────────────────────── /예약 ───────────────────────────────
+REMIND_BEFORE = 600  # 시작 10분 전에 알림 + 통화방 생성
+WEEKDAYS = "월화수목금토일"
+TIME_RE = re.compile(
+    r"^\s*(?:(?P<day>오늘|내일|모레)|(?P<mon>\d{1,2})\s*(?:[/.\-]|월)\s*(?P<dd>\d{1,2})\s*일?)?\s*"
+    r"(?P<ampm>오전|오후|am|pm)?\s*(?P<h>\d{1,2})\s*(?:(?::|시)\s*(?:(?P<m>\d{1,2})\s*분?)?)?\s*(?P<ampm2>am|pm)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_time(text: str, now: datetime):
+    """'21:00', '오후 9시', '내일 20:30', '10/25 21:00' 같은 글자를 시간으로. 못 읽으면 None."""
+    m = TIME_RE.match(text or "")
+    if not m:
+        return None
+    h, mi = int(m["h"]), int(m["m"] or 0)
+    ampm = (m["ampm"] or m["ampm2"] or "").lower()
+    if ampm in ("오후", "pm") and h < 12:
+        h += 12
+    if ampm in ("오전", "am") and h == 12:
+        h = 0
+    if not (0 <= h <= 23 and 0 <= mi <= 59):
+        return None
+    if m["mon"]:
+        try:
+            t = datetime(now.year, int(m["mon"]), int(m["dd"]), h, mi, tzinfo=TZ)
+        except ValueError:
+            return None
+        if t < now:
+            t = t.replace(year=now.year + 1)
+        return t
+    if m["day"]:
+        base = now.date() + timedelta(days={"오늘": 0, "내일": 1, "모레": 2}[m["day"]])
+        return datetime.combine(base, dtime(h, mi), TZ)
+    t = datetime.combine(now.date(), dtime(h, mi), TZ)
+    if t <= now and not ampm and h < 12:  # '9:00'인데 오전 9시가 지났으면 오후 9시로
+        t = t.replace(hour=h + 12)
+    if t <= now:
+        t += timedelta(days=1)
+    return t
+
+
+def time_text(ts: float) -> str:
+    t = datetime.fromtimestamp(ts, TZ)
+    days = (t.date() - datetime.now(TZ).date()).days
+    day = {0: "오늘", 1: "내일", 2: "모레"}.get(days, f"{t.month}월 {t.day}일 ({WEEKDAYS[t.weekday()]})")
+    ampm = "오전" if t.hour < 12 else "오후"
+    return f"{day} {ampm} {t.hour % 12 or 12}:{t.minute:02d}"
+
+
+async def res_card_file(res: dict, status: str) -> discord.File:
+    guild = bot.get_guild(res["guild"])
+    parts = sorted(res["participants"], key=lambda p: p["id"] != res["author"])  # 주최자가 맨 앞
+    members = await asyncio.gather(*[_applicant_entry(guild, p) for p in parts[:recruit_card.MAX_SLOTS]]) \
+        if guild else [(p["name"], None) for p in parts]
+    icon = None
+    entry = store.game(res["guild"], res.get("game"))
+    if entry and entry.get("file") and os.path.exists(entry["file"]):
+        with open(entry["file"], "rb") as f:
+            icon = f.read()
+    footer = {"open": "시작 10분 전에 참가자 알림 + 통화방 자동 생성", "full": "시작 10분 전에 참가자 알림 + 통화방 자동 생성",
+              "started": None, "cancelled": None}[status]
+    if status in ("open", "full") and res.get("room"):
+        footer = "통화방이 열렸어요! 아래 버튼으로 들어오세요"
+    buf = await asyncio.to_thread(
+        recruit_card.render_card,
+        icon=icon,
+        title=res.get("game") or "예약",
+        content=res["content"],
+        author=res["author_name"],
+        voice_name="",
+        target=res["target"],
+        members=list(members),
+        status=status,
+        tags=[f"{time_text(res['start_at'])} 시작"] + res.get("tags", []),
+        meta=f"주최 {res['author_name']}   ·   참가 버튼으로 신청",
+        footer=footer,
+        custom_emojis=await custom_emoji_images(res["content"]),
+    )
+    return discord.File(buf, filename="reservation.png")
+
+
+def res_status(res: dict) -> str:
+    return "full" if len(res["participants"]) >= res["target"] else "open"
+
+
+def res_view(message_id: int, res: dict, finished: bool = False) -> discord.ui.View | None:
+    view = discord.ui.View(timeout=None)
+    room = bot.get_channel(res["room"]) if res.get("room") else None
+    if room:
+        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=room.jump_url))
+    if not finished:
+        view.add_item(discord.ui.Button(label="참가", style=discord.ButtonStyle.primary, custom_id=f"res_join:{message_id}"))
+        view.add_item(discord.ui.Button(label="취소", style=discord.ButtonStyle.danger, custom_id=f"res_cancel:{message_id}"))
+    return view if view.children else None
+
+
+async def res_message(res: dict, message_id: int):
+    ch = bot.get_channel(res["channel"])
+    if ch is None:
+        return None
+    try:
+        return await ch.fetch_message(message_id)
+    except discord.HTTPException:
+        return None
+
+
+async def update_res_post(message_id: int, res: dict, status: str | None = None, msg=None):
+    msg = msg or await res_message(res, message_id)
+    if msg is None:
+        return
+    status = status or res_status(res)
+    finished = status in ("started", "cancelled")
+    try:
+        await msg.edit(attachments=[await res_card_file(res, status)], view=res_view(message_id, res, finished))
+    except discord.HTTPException as e:
+        log.warning("예약 글 갱신 실패 %s: %s", message_id, e)
+
+
+async def handle_res_join(interaction: discord.Interaction, message_id: int):
+    res = store.res(message_id)
+    if not res:
+        await interaction.response.send_message("이미 끝났거나 취소된 예약이에요.", ephemeral=True)
+        return
+    user = interaction.user
+    if user.id == res["author"]:
+        await interaction.response.send_message("주최자는 자동으로 참가돼 있어요. 예약을 없애려면 '취소'를 눌러 주세요.",
+                                                ephemeral=True)
+        return
+    joined = any(p["id"] == user.id for p in res["participants"])
+    if not joined and len(res["participants"]) >= res["target"]:
+        await interaction.response.send_message("자리가 다 찼어요.", ephemeral=True)
+        return
+    await interaction.response.defer()
+    if joined:
+        res["participants"] = [p for p in res["participants"] if p["id"] != user.id]
+        note = "참가를 취소했어요."
+    else:
+        res["participants"].append({"id": user.id, "name": user.display_name})
+        note = f"참가했어요! {time_text(res['start_at'])} 10분 전에 알림이 가요. (다시 누르면 취소)"
+    store.set_res(message_id, res)
+    await update_res_post(message_id, res, msg=interaction.message)
+    await interaction.followup.send(note, ephemeral=True)
+
+
+async def handle_res_cancel(interaction: discord.Interaction, message_id: int):
+    res = store.res(message_id)
+    if not res:
+        await interaction.response.send_message("이미 끝났거나 취소된 예약이에요.", ephemeral=True)
+        return
+    if interaction.user.id != res["author"] and not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("예약한 사람만 취소할 수 있어요. 참가를 빼려면 '참가'를 다시 눌러 주세요.",
+                                                ephemeral=True)
+        return
+    await interaction.response.defer()
+    store.remove_res(message_id)
+    await update_res_post(message_id, res, status="cancelled", msg=interaction.message)
+    await interaction.followup.send("예약을 취소했어요.", ephemeral=True)
+
+
+async def remind_res(message_id: int, res: dict):
+    """시작 10분 전: 통화방 만들고 참가자 멘션."""
+    guild = bot.get_guild(res["guild"])
+    channel = bot.get_channel(res["channel"])
+    if guild is None or channel is None:
+        return
+    room = None
+    try:
+        host = guild.get_member(res["author"]) or await guild.fetch_member(res["author"])
+        async with user_lock(host.id):
+            room = existing_room(guild, host)
+            if room is None:
+                room = await create_room(host, pick_category(guild, host, channel),
+                                         limit=min(res["target"], 99), game=res.get("game"))
+                # 시작 15분 뒤까지 아무도 없으면 정리
+                asyncio.create_task(schedule_empty_check(room.id, delay=res["start_at"] - time.time() + 900))
+    except discord.HTTPException as e:
+        log.warning("예약 통화방 생성 실패: %s", e)
+    res["room"] = room.id if room else None
+    store.set_res(message_id, res)
+    mentions = " ".join(f"<@{p['id']}>" for p in res["participants"])
+    where = f"{room.mention}로 모여 주세요!" if room else "모일 준비를 해 주세요!"
+    view = discord.ui.View()
+    if room:
+        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=room.jump_url))
+    try:
+        await channel.send(f"⏰ **{res.get('game') or '예약'} 10분 후 시작!** {mentions}\n{where}",
+                           view=view if room else discord.utils.MISSING,
+                           allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+    except discord.HTTPException as e:
+        log.warning("예약 알림 실패: %s", e)
+    await update_res_post(message_id, res)
+
+
+@tasks.loop(seconds=30)
+async def reservation_tick():
+    now = time.time()
+    for mid, res in list(store.data["reservations"].items()):
+        try:
+            if now - res["start_at"] > 1800:  # 봇이 꺼져 있던 사이에 지나간 예약
+                store.remove_res(mid)
+                await update_res_post(int(mid), res, status="started")
+                continue
+            if not res.get("reminded") and now >= res["start_at"] - REMIND_BEFORE:
+                res["reminded"] = True
+                store.set_res(mid, res)
+                await remind_res(int(mid), res)
+            if now >= res["start_at"]:
+                store.remove_res(mid)
+                await update_res_post(int(mid), res, status="started")
+        except Exception:
+            log.exception("예약 처리 실패 %s", mid)
+
+
+@bot.tree.command(name="예약", description="시간을 정해서 같이 할 사람을 모아요 (10분 전에 알림 + 통화방 자동 생성)")
+@app_commands.guild_only()
+@app_commands.describe(
+    시간="예: 21:00, 오후 9시, 내일 20:30, 10/25 21:00",
+    인원="나 포함 최대 몇 명 (예: 내전이면 10)",
+    게임="등록된 게임 중에서 고르기",
+    내용="예: 5:5 내전, 늦지 말기 (선택)",
+    티어="예: 골드~플래 (선택)",
+    멘션역할="알림 보낼 역할 (게임에 연결된 역할은 자동으로 같이 멘션돼요)",
+)
+@app_commands.autocomplete(게임=game_autocomplete, 티어=tier_autocomplete)
+async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Range[str, 1, 30],
+                      인원: app_commands.Range[int, 2, 20], 게임: str | None = None,
+                      내용: app_commands.Range[str, 1, 200] | None = None,
+                      티어: app_commands.Range[str, 1, 30] | None = None,
+                      멘션역할: discord.Role | None = None):
+    member = interaction.user
+    game = await resolve_game(interaction, 게임)
+    if game is False:
+        return
+    if game is None and member.voice and member.voice.channel and store.room(member.voice.channel.id):
+        game = store.room(member.voice.channel.id).get("game")
+    now = datetime.now(TZ)
+    start = parse_time(시간, now)
+    if start is None:
+        await interaction.response.send_message(
+            "시간을 읽지 못했어요. `21:00`, `오후 9시`, `내일 20:30`, `10/25 21:00`처럼 적어 주세요.", ephemeral=True)
+        return
+    if start - now > timedelta(days=7):
+        await interaction.response.send_message("예약은 7일 안쪽으로만 할 수 있어요.", ephemeral=True)
+        return
+    target_id = store.recruit_channel(interaction.guild.id)
+    target = interaction.guild.get_channel(target_id) if target_id else interaction.channel
+    if target is None or not hasattr(target, "send"):
+        await interaction.response.send_message("글을 올릴 채널을 찾지 못했어요. 관리자에게 `/통화방설정 구인채널`을 부탁해 주세요.",
+                                                ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    res = {
+        "guild": interaction.guild.id, "channel": target.id, "author": member.id, "author_name": member.display_name,
+        "game": game, "content": 내용 or "같이 할 사람 모여요!", "target": 인원, "start_at": start.timestamp(),
+        "tags": [티어.strip()] if 티어 and 티어.strip() else [], "participants": [{"id": member.id, "name": member.display_name}],
+        "reminded": False, "room": None,
+    }
+    roles = [멘션역할] if 멘션역할 else []
+    game_role_id = (store.game(interaction.guild.id, game) or {}).get("role")
+    game_role = interaction.guild.get_role(game_role_id) if game_role_id else None
+    if game_role and game_role not in roles:
+        roles.append(game_role)
+    header = "".join(f"{r.mention} " for r in roles)
+    try:
+        msg = await target.send(
+            content=f"{header}{member.mention}님이 **{time_text(res['start_at'])}**에 {game or '같이 할'} 사람을 모아요!",
+            file=await res_card_file(res, res_status(res)),
+            allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+        )
+        await msg.edit(view=res_view(msg.id, res))  # 버튼에 메시지 ID가 들어가야 해서 올린 뒤에 붙임
+    except discord.HTTPException:
+        await interaction.followup.send(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
+        return
+    store.set_res(msg.id, res)
+    soon = start.timestamp() - time.time() <= REMIND_BEFORE
+    done = (f"예약 글을 올렸어요: {msg.jump_url}\n**{time_text(res['start_at'])}** 시작"
+            + (" (10분 안이라 곧 알림과 통화방이 만들어져요)" if soon else ", 10분 전에 알림과 통화방이 만들어져요."))
+    if roles and not mention_ok(interaction.guild, roles, target):
+        done += "\n⚠️ 역할 멘션이 알림으로 가지 않았을 수 있어요. 관리자에게 그 역할의 '@멘션 허용' 설정을 부탁해 주세요."
+    await interaction.followup.send(done, ephemeral=True)
 
 
 @bot.tree.error

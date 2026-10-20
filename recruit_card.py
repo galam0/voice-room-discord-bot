@@ -108,12 +108,39 @@ def circle_avatar(data: bytes | None, name: str, size: int, color):
     return img
 
 
+ICON = 76  # 게임 아이콘 크기
+
+
+def game_icon(data: bytes | None, name: str, color):
+    """등록된 아이콘(둥근 사각형) 또는 첫 글자 기본 아이콘."""
+    size = ICON
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size - 1, size - 1), radius=18, fill=255)
+    face = None
+    if data:
+        try:
+            face = Image.open(io.BytesIO(data)).convert("RGBA").resize((size, size), Image.LANCZOS)
+        except Exception:
+            face = None
+    if face is None:
+        face = Image.new("RGBA", (size, size), color + (255,))
+        ImageDraw.Draw(face).text((size / 2, size / 2), (name or "?")[:1].upper(),
+                                  font=font(40, True), fill=(255, 255, 255), anchor="mm")
+    else:
+        bg = Image.new("RGBA", (size, size), PANEL + (255,))
+        face = Image.alpha_composite(bg, face)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(face, (0, 0), mask)
+    return out
+
+
 def render_card(*, title: str, content: str, author: str, voice_name: str, target: int,
-                members: list[tuple[str, bytes | None]], status: str) -> io.BytesIO:
+                members: list[tuple[str, bytes | None]], status: str, icon: bytes | None = None) -> io.BytesIO:
     """
     title: 게임 이름 (없으면 '구인')
     members: [(이름, 아바타 PNG 바이트 또는 None), ...]
     status: 'open' | 'full' | 'closed'
+    icon: 서버에서 등록한 게임 아이콘 이미지 바이트 (없으면 첫 글자 아이콘)
     """
     accent = COLORS[status]
     tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
@@ -123,24 +150,29 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     slots = min(max(target, len(members)), MAX_SLOTS)
     per_row = 8
     rows = (slots + per_row - 1) // per_row
-    height = PAD + 44 + 28 + len(lines) * 60 + 20 + 34 + 36 + 1 + 36 + 34 + 20 + rows * (SLOT + 46) + PAD - 10
+    height = PAD + ICON + 28 + len(lines) * 60 + 20 + 34 + 36 + 1 + 36 + 34 + 20 + rows * (SLOT + 46) + PAD - 10
 
     img = Image.new("RGB", (W, height), BG)
     d = ImageDraw.Draw(img)
     d.rectangle((0, 0, W, 10), fill=accent)
 
-    # 상단: 게임 태그 + 상태
+    # 상단: 게임 아이콘 + 게임 이름 + 상태
     y = PAD
-    pill(d, PAD, y, title or "구인", font(24, True), accent)
+    title = title or "구인"
+    ic = game_icon(icon, title, accent)
+    img.paste(ic, (PAD, y), ic)
     st = STATUS_TEXT[status]
     if status == "open":
         st += f" · {max(target - len(members), 0)}명 더"
     f_st = font(24, True)
     st_w = text_w(d, st, f_st) + 36
-    pill(d, W - PAD - st_w, y, st, f_st, PANEL, color=accent)
+    pill(d, W - PAD - st_w, y + (ICON - 44) / 2, st, f_st, PANEL, color=accent)
+    title_x = PAD + ICON + 20
+    d.text((title_x, y + ICON / 2), ellipsize(d, title, font(32, True), W - PAD - st_w - 20 - title_x),
+           font=font(32, True), fill=TEXT, anchor="lm")
 
     # 내용
-    y += 44 + 28
+    y += ICON + 28
     for line in lines:
         d.text((PAD, y), line, font=f_title, fill=TEXT if status != "closed" else SUB)
         y += 60

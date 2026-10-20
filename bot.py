@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -109,6 +110,26 @@ class Store:
     def remove_post(self, voice_id: int):
         if self.data["posts"].pop(str(voice_id), None) is not None:
             self.save()
+
+    # 게임 아이콘 {정규화된 이름: {"name": 표시 이름, "file": 파일 경로}}
+    def game_icons(self, guild_id: int) -> dict:
+        return self.data["guilds"].get(str(guild_id), {}).get("game_icons", {})
+
+    def set_game_icon(self, guild_id: int, name: str, path):
+        icons = self.data["guilds"].setdefault(str(guild_id), {}).setdefault("game_icons", {})
+        if path is None:
+            icons.pop(game_key(name), None)
+        else:
+            icons[game_key(name)] = {"name": name, "file": path}
+        self.save()
+
+
+def game_key(name: str) -> str:
+    """'League of Legends', 'league of legends' 를 같은 게임으로 보기."""
+    return "".join(name.lower().split())
+
+
+ICON_DIR = os.getenv("ICON_DIR", "icons")
 
 
 store = Store(DATA_FILE)
@@ -237,8 +258,14 @@ async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.
         status = "full"
     else:
         status = "open"
+    icon = None
+    entry = store.game_icons(info["guild"]).get(game_key(info["game"])) if info.get("game") and info.get("guild") else None
+    if entry and os.path.exists(entry["file"]):
+        with open(entry["file"], "rb") as f:
+            icon = f.read()
     buf = await asyncio.to_thread(
         recruit_card.render_card,
+        icon=icon,
         title=info.get("game") or "구인",
         content=info["content"],
         author=info["author_name"],
@@ -571,6 +598,61 @@ async def cmd_setup_recruit(interaction: discord.Interaction, 채널: discord.Te
     await interaction.response.send_message(msg, ephemeral=True)
 
 
+async def game_autocomplete(interaction: discord.Interaction, current: str):
+    names = [e["name"] for e in store.game_icons(interaction.guild_id).values()]
+    key = game_key(current)
+    return [app_commands.Choice(name=n, value=n) for n in sorted(names) if key in game_key(n)][:25]
+
+
+@setup_group.command(name="게임아이콘", description="구인 이미지에 나올 게임 아이콘을 등록해요")
+@app_commands.describe(게임="게임 이름 (예: 발로란트)", 이미지="아이콘 이미지 (PNG/JPG, 정사각형 추천)")
+async def cmd_setup_icon(interaction: discord.Interaction, 게임: app_commands.Range[str, 1, 50],
+                         이미지: discord.Attachment):
+    if not (이미지.content_type or "").startswith("image/") or 이미지.size > 5 * 1024 * 1024:
+        await interaction.response.send_message("5MB 이하 이미지 파일(PNG/JPG)만 올릴 수 있어요.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    data = await 이미지.read()
+
+    def save():
+        from PIL import Image
+        import io as _io
+        im = Image.open(_io.BytesIO(data)).convert("RGBA")
+        side = min(im.size)  # 가운데 기준 정사각형으로 자르기
+        left, top = (im.width - side) // 2, (im.height - side) // 2
+        im = im.crop((left, top, left + side, top + side)).resize((256, 256), Image.LANCZOS)
+        os.makedirs(ICON_DIR, exist_ok=True)
+        path = os.path.join(ICON_DIR, f"{interaction.guild.id}_{hashlib.md5(game_key(게임).encode()).hexdigest()[:12]}.png")
+        im.save(path, "PNG")
+        return path
+
+    try:
+        path = await asyncio.to_thread(save)
+    except Exception:
+        await interaction.followup.send("이미지를 읽지 못했어요. 다른 파일로 해 주세요.", ephemeral=True)
+        return
+    old = store.game_icons(interaction.guild.id).get(game_key(게임))
+    if old and old["file"] != path and os.path.exists(old["file"]):
+        os.remove(old["file"])
+    store.set_game_icon(interaction.guild.id, 게임, path)
+    await interaction.followup.send(f"**{게임}** 아이콘을 등록했어요. `/구인`에서 게임을 고를 때 목록에 떠요.", ephemeral=True)
+
+
+@setup_group.command(name="게임아이콘삭제", description="등록한 게임 아이콘을 지워요")
+async def cmd_setup_icon_remove(interaction: discord.Interaction, 게임: str):
+    entry = store.game_icons(interaction.guild.id).get(game_key(게임))
+    if not entry:
+        await interaction.response.send_message("등록된 아이콘이 없어요.", ephemeral=True)
+        return
+    if os.path.exists(entry["file"]):
+        os.remove(entry["file"])
+    store.set_game_icon(interaction.guild.id, 게임, None)
+    await interaction.response.send_message(f"**{entry['name']}** 아이콘을 지웠어요.", ephemeral=True)
+
+
+cmd_setup_icon_remove.autocomplete("게임")(game_autocomplete)
+
+
 # ─────────────────────────────── /구인 ───────────────────────────────
 @bot.tree.command(name="구인", description="지금 있는 통화방으로 같이 할 사람을 구해요")
 @app_commands.guild_only()
@@ -600,7 +682,10 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     await close_post(voice.id)
 
     current = len(humans(voice))
-    info = {"voice": voice.id, "voice_name": voice.name, "author": member.id,
+    if 게임:  # 등록된 게임이면 등록된 표기로 맞춤
+        entry = store.game_icons(interaction.guild.id).get(game_key(게임))
+        게임 = entry["name"] if entry else 게임
+    info = {"voice": voice.id, "voice_name": voice.name, "author": member.id, "guild": interaction.guild.id,
             "author_name": member.display_name, "content": 내용, "game": 게임, "target": current + 인원}
     header = f"{멘션역할.mention} " if 멘션역할 else ""
     try:
@@ -616,6 +701,9 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     info.update(channel=target.id, message=msg.id)
     store.set_post(voice.id, **info)
     await interaction.followup.send(f"구인 글을 올렸어요: {msg.jump_url}", ephemeral=True)
+
+
+cmd_recruit.autocomplete("게임")(game_autocomplete)
 
 
 @bot.tree.command(name="구인마감", description="내가 올린 구인 글을 마감해요")

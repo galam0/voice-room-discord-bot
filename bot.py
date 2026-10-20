@@ -1,17 +1,18 @@
 """
 통화방 자동 생성 디스코드 봇 (Join to Create)
 
-- "➕ 통화방 만들기" 채널에 들어가면 "OOO의 통화방"을 만들어 자동 이동
+- 생성 채널에 들어가면 "OOO의 통화방"을 만들어 자동 이동
+- 게임별 생성 채널: "➕ 발로란트 5인방"에 들어가면 "OOO의 발로란트"(인원 5명 제한)
 - /통화방 생성 명령어로도 생성 가능
-- 빈 방은 자동 삭제
-- 방장 전용: 이름 변경, 인원 제한, 잠금/공개, 잠긴 방에 허용, 방장 넘기기
-- 방장이 나가면 남은 사람에게 방장 자동 위임
-- 한 사람당 방 1개
-- /구인: 지금 있는 통화방으로 사람 구하는 글 (입장 버튼, 인원 자동 갱신, 방 비면 자동 마감)
+- 방이 생기면 음성 채널 채팅에 버튼 컨트롤 패널 (잠금·공개·허용·이름·인원·방장넘기기)
+- 빈 방 자동 삭제, 방장이 나가면 자동 위임, 한 사람당 방 1개
+- /구인: 지금 있는 통화방으로 사람 구하는 이미지 글 (입장 버튼, 인원 자동 갱신, 방 비면 자동 마감)
+- 게임은 관리자가 등록한 것만 쓸 수 있고, 명령어에서 자동완성으로 고름
 """
 
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import os
@@ -27,6 +28,7 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 DATA_FILE = os.getenv("DATA_FILE", "data.json")
+ICON_DIR = os.getenv("ICON_DIR", "icons")
 # 명령어로 만든 방에 아무도 안 들어오면 이 시간(초) 뒤 삭제
 EMPTY_GRACE_SECONDS = int(os.getenv("EMPTY_GRACE_SECONDS", "60"))
 # 디스코드는 채널 이름 변경을 10분에 2번으로 제한함 → 오래 기다리지 않고 포기할 시간
@@ -36,19 +38,47 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("voicebot")
 
 
+def game_key(name: str) -> str:
+    """'League of Legends', 'league of legends' 를 같은 게임으로 보기."""
+    return "".join(name.lower().split())
+
+
 # ─────────────────────────────── 저장소 ───────────────────────────────
 class Store:
-    """서버별 생성 채널(hub)과 만들어진 방 목록을 JSON 파일에 저장."""
+    """
+    data.json 구조
+    guilds[서버ID]:
+        hubs:   {생성채널ID: {"game": 게임 이름 또는 None, "limit": 인원 제한}}
+        games:  {게임키: {"name": 표시 이름, "file": 아이콘 파일 경로 또는 None}}
+        recruit: 구인 글 채널ID
+    rooms[방ID]: {"owner", "guild", "custom_name", "locked", "game"}
+    posts[음성채널ID]: 구인 글 정보
+    """
 
     def __init__(self, path: str):
         self.path = path
-        self.data = {"guilds": {}, "rooms": {}}
+        self.data = {"guilds": {}, "rooms": {}, "posts": {}}
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 self.data = json.load(f)
-        self.data.setdefault("guilds", {})
-        self.data.setdefault("rooms", {})
-        self.data.setdefault("posts", {})
+        for key in ("guilds", "rooms", "posts"):
+            self.data.setdefault(key, {})
+        self._migrate()
+
+    def _migrate(self):
+        """이전 버전 data.json(생성 채널 1개, game_icons) 자동 변환."""
+        changed = False
+        for g in self.data["guilds"].values():
+            if "hub" in g:
+                hub = g.pop("hub")
+                if hub:
+                    g.setdefault("hubs", {})[str(hub)] = {"game": None, "limit": 0}
+                changed = True
+            if "game_icons" in g:
+                g.setdefault("games", {}).update(g.pop("game_icons"))
+                changed = True
+        if changed:
+            self.save()
 
     def save(self):
         tmp = self.path + ".tmp"
@@ -56,24 +86,34 @@ class Store:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, self.path)
 
-    # 생성 채널(hub)
-    def hub(self, guild_id: int):
-        return self.data["guilds"].get(str(guild_id), {}).get("hub")
+    def guild(self, guild_id: int) -> dict:
+        return self.data["guilds"].setdefault(str(guild_id), {})
 
-    def set_hub(self, guild_id: int, channel_id):
-        self.data["guilds"].setdefault(str(guild_id), {})["hub"] = channel_id
+    # 생성 채널
+    def hubs(self, guild_id: int) -> dict:
+        return self.guild(guild_id).get("hubs", {})
+
+    def set_hub(self, guild_id: int, channel_id: int, game=None, limit=0):
+        self.guild(guild_id).setdefault("hubs", {})[str(channel_id)] = {"game": game, "limit": limit}
         self.save()
+
+    def remove_hub(self, guild_id: int, channel_id: int) -> bool:
+        removed = self.guild(guild_id).get("hubs", {}).pop(str(channel_id), None) is not None
+        if removed:
+            self.save()
+        return removed
 
     # 방
     def room(self, channel_id: int):
         return self.data["rooms"].get(str(channel_id))
 
-    def add_room(self, channel_id: int, owner_id: int, guild_id: int, custom_name: bool):
+    def add_room(self, channel_id: int, owner_id: int, guild_id: int, custom_name: bool, game=None):
         self.data["rooms"][str(channel_id)] = {
             "owner": owner_id,
             "guild": guild_id,
             "custom_name": custom_name,  # 방장이 직접 이름을 정했으면 방장 바뀌어도 이름 유지
             "locked": False,
+            "game": game,
         }
         self.save()
 
@@ -93,10 +133,10 @@ class Store:
 
     # 구인 채널
     def recruit_channel(self, guild_id: int):
-        return self.data["guilds"].get(str(guild_id), {}).get("recruit")
+        return self.guild(guild_id).get("recruit")
 
     def set_recruit_channel(self, guild_id: int, channel_id):
-        self.data["guilds"].setdefault(str(guild_id), {})["recruit"] = channel_id
+        self.guild(guild_id)["recruit"] = channel_id
         self.save()
 
     # 구인 글 (음성 채널 하나당 글 하나)
@@ -111,25 +151,20 @@ class Store:
         if self.data["posts"].pop(str(voice_id), None) is not None:
             self.save()
 
-    # 게임 아이콘 {정규화된 이름: {"name": 표시 이름, "file": 파일 경로}}
-    def game_icons(self, guild_id: int) -> dict:
-        return self.data["guilds"].get(str(guild_id), {}).get("game_icons", {})
+    # 등록된 게임
+    def games(self, guild_id: int) -> dict:
+        return self.guild(guild_id).get("games", {})
 
-    def set_game_icon(self, guild_id: int, name: str, path):
-        icons = self.data["guilds"].setdefault(str(guild_id), {}).setdefault("game_icons", {})
-        if path is None:
-            icons.pop(game_key(name), None)
-        else:
-            icons[game_key(name)] = {"name": name, "file": path}
+    def game(self, guild_id: int, name: str | None):
+        return self.games(guild_id).get(game_key(name)) if name else None
+
+    def set_game(self, guild_id: int, name: str, icon_file):
+        self.guild(guild_id).setdefault("games", {})[game_key(name)] = {"name": name, "file": icon_file}
         self.save()
 
-
-def game_key(name: str) -> str:
-    """'League of Legends', 'league of legends' 를 같은 게임으로 보기."""
-    return "".join(name.lower().split())
-
-
-ICON_DIR = os.getenv("ICON_DIR", "icons")
+    def remove_game(self, guild_id: int, name: str):
+        self.guild(guild_id).get("games", {}).pop(game_key(name), None)
+        self.save()
 
 
 store = Store(DATA_FILE)
@@ -147,11 +182,11 @@ def user_lock(user_id: int) -> asyncio.Lock:
 
 
 # ─────────────────────────────── 도우미 ───────────────────────────────
-def default_name(member: discord.Member) -> str:
-    return f"{member.display_name}의 통화방"[:100]
+def default_name(member: discord.Member, game: str | None = None) -> str:
+    return f"{member.display_name}의 {game or '통화방'}"[:100]
 
 
-def humans(channel: discord.VoiceChannel):
+def humans(channel):
     return [m for m in channel.members if not m.bot]
 
 
@@ -183,28 +218,36 @@ async def delete_room(channel: discord.VoiceChannel, reason: str):
         log.warning("채널 삭제 실패 %s: %s", channel.id, e)
 
 
+def first_hub_category(guild: discord.Guild):
+    for cid in store.hubs(guild.id):
+        ch = guild.get_channel(int(cid))
+        if ch and ch.category:
+            return ch.category
+    return None
+
+
 def pick_category(guild: discord.Guild, member: discord.Member, fallback):
     """새 방을 만들 카테고리: 생성 채널 카테고리 > 지금 있는 음성 채널 카테고리 > 명령어 친 채널 카테고리."""
-    hub_id = store.hub(guild.id)
-    hub = guild.get_channel(hub_id) if hub_id else None
-    if hub and hub.category:
-        return hub.category
+    category = first_hub_category(guild)
+    if category:
+        return category
     if member.voice and member.voice.channel and member.voice.channel.category:
         return member.voice.channel.category
     return getattr(fallback, "category", None)
 
 
-async def create_room(member: discord.Member, category, name=None, limit=0) -> discord.VoiceChannel:
+async def create_room(member: discord.Member, category, name=None, limit=0, game=None) -> discord.VoiceChannel:
     overwrites = dict(category.overwrites) if category else {}
     channel = await member.guild.create_voice_channel(
-        name=(name or default_name(member))[:100],
+        name=(name or default_name(member, game))[:100],
         category=category,
         user_limit=limit,
         overwrites=overwrites,
         reason=f"{member} 통화방 생성",
     )
-    store.add_room(channel.id, member.id, member.guild.id, custom_name=bool(name))
+    store.add_room(channel.id, member.id, member.guild.id, custom_name=bool(name), game=game)
     log.info("방 생성: %s (방장 %s)", channel.name, member)
+    asyncio.create_task(send_panel(channel, member))
     return channel
 
 
@@ -224,10 +267,10 @@ async def transfer_owner(channel: discord.VoiceChannel, new_owner: discord.Membe
     store.update_room(channel.id, owner=new_owner.id)
     if room and room["locked"]:
         await channel.set_permissions(new_owner, connect=True, reason="방장 위임")
-    await notify(channel, f"👑 {new_owner.mention}님이 새 방장이 됐어요.")
+    await notify(channel, f"👑 {new_owner.mention}님이 새 방장이 됐어요. 컨트롤 패널 버튼을 쓸 수 있어요.")
     if room and not room["custom_name"]:
         # 이름 변경은 제한이 있어서 기다리지 않게 백그라운드로
-        asyncio.create_task(try_rename(channel, default_name(new_owner)))
+        asyncio.create_task(try_rename(channel, default_name(new_owner, room.get("game"))))
 
 
 async def schedule_empty_check(channel_id: int):
@@ -236,6 +279,194 @@ async def schedule_empty_check(channel_id: int):
     ch = bot.get_channel(channel_id)
     if ch and store.room(channel_id) and not humans(ch):
         await delete_room(ch, "아무도 들어오지 않은 통화방")
+
+
+# ─────────────────────────────── 방장 기능 (명령어·버튼 공용) ───────────────────────────────
+async def lock_room(ch: discord.VoiceChannel, owner: discord.Member):
+    guild = ch.guild
+    overwrites = dict(ch.overwrites)
+    # 모든 역할(@everyone 포함)은 입장 금지
+    for target in [guild.default_role] + [t for t in overwrites if isinstance(t, discord.Role)]:
+        ow = overwrites.get(target, discord.PermissionOverwrite())
+        ow.connect = False
+        overwrites[target] = ow
+    # 지금 있는 사람, 방장, 봇은 허용
+    for m in set(ch.members) | {owner, guild.me}:
+        ow = overwrites.get(m, discord.PermissionOverwrite())
+        ow.connect = True
+        overwrites[m] = ow
+    await ch.edit(overwrites=overwrites)
+    store.update_room(ch.id, locked=True)
+
+
+async def unlock_room(ch: discord.VoiceChannel):
+    # 카테고리 기본 권한으로 되돌림
+    await ch.edit(overwrites=dict(ch.category.overwrites) if ch.category else {})
+    store.update_room(ch.id, locked=False)
+
+
+async def allow_member(ch: discord.VoiceChannel, member: discord.Member, by) -> str:
+    await ch.set_permissions(member, connect=True, reason=f"{by} 허용")
+    extra = "" if store.room(ch.id)["locked"] else " (지금은 공개 상태라 원래 누구나 들어올 수 있어요)"
+    return f"{member.mention}님이 {ch.mention}에 들어올 수 있어요.{extra}"
+
+
+async def rename_room(ch: discord.VoiceChannel, name: str) -> str:
+    if await try_rename(ch, name):
+        store.update_room(ch.id, custom_name=True)
+        return f"이름을 **{name}**(으)로 바꿨어요."
+    return "디스코드 제한으로 채널 이름은 10분에 2번까지만 바꿀 수 있어요. 잠시 뒤에 다시 해 주세요."
+
+
+async def set_limit(ch: discord.VoiceChannel, limit: int) -> str:
+    await ch.edit(user_limit=limit)
+    return "인원 제한을 없앴어요." if limit == 0 else f"인원을 **{limit}명**으로 제한했어요."
+
+
+def transfer_problem(ch: discord.VoiceChannel, actor: discord.Member, target: discord.Member):
+    """방장 넘기기가 안 되는 이유 (되면 None)."""
+    if target.bot or target.id == actor.id:
+        return "다른 사람(봇 제외)에게만 넘길 수 있어요."
+    if target not in ch.members:
+        return f"{target.mention}님이 {ch.mention}에 있어야 넘길 수 있어요."
+    if store.room_of_owner(ch.guild.id, target.id) is not None:
+        return "그 사람은 이미 다른 방의 방장이에요."
+    return None
+
+
+# ─────────────────────────────── 컨트롤 패널 ───────────────────────────────
+def panel_view(channel_id: int) -> discord.ui.View:
+    """버튼은 custom_id로 on_interaction에서 처리 → 봇이 재시작돼도 동작."""
+    view = discord.ui.View(timeout=None)
+    buttons = [
+        ("lock", "잠금", "🔒", discord.ButtonStyle.secondary, 0),
+        ("unlock", "공개", "🔓", discord.ButtonStyle.secondary, 0),
+        ("allow", "허용", "✅", discord.ButtonStyle.secondary, 0),
+        ("rename", "이름", "✏️", discord.ButtonStyle.primary, 1),
+        ("limit", "인원", "👥", discord.ButtonStyle.primary, 1),
+        ("transfer", "방장넘기기", "👑", discord.ButtonStyle.primary, 1),
+    ]
+    for action, label, emoji, style, row in buttons:
+        view.add_item(discord.ui.Button(label=label, emoji=emoji, style=style, row=row,
+                                        custom_id=f"panel:{action}:{channel_id}"))
+    return view
+
+
+async def send_panel(channel: discord.VoiceChannel, owner: discord.Member):
+    embed = discord.Embed(
+        title="🎛️ 통화방 컨트롤 패널",
+        description=(
+            f"방장: {owner.mention}\n\n"
+            "🔒 **잠금** 지금 있는 사람만 들어올 수 있게\n"
+            "🔓 **공개** 누구나 들어올 수 있게\n"
+            "✅ **허용** 잠긴 방에 들어올 사람 고르기\n"
+            "✏️ **이름** · 👥 **인원** · 👑 **방장넘기기**\n\n"
+            "방장만 누를 수 있어요."
+        ),
+        color=discord.Color.blurple(),
+    )
+    try:
+        await channel.send(embed=embed, view=panel_view(channel.id))
+    except discord.HTTPException as e:
+        log.warning("패널 전송 실패 %s: %s", channel.id, e)
+
+
+class RenameModal(discord.ui.Modal, title="통화방 이름 바꾸기"):
+    def __init__(self, channel: discord.VoiceChannel):
+        super().__init__()
+        self.channel = channel
+        self.name = discord.ui.TextInput(label="새 이름", max_length=100, default=channel.name)
+        self.add_item(self.name)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_owner(self.channel, interaction.user):
+            await interaction.response.send_message("방장만 바꿀 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(await rename_room(self.channel, self.name.value.strip()), ephemeral=True)
+
+
+class LimitModal(discord.ui.Modal, title="인원 제한 바꾸기"):
+    def __init__(self, channel: discord.VoiceChannel):
+        super().__init__()
+        self.channel = channel
+        self.limit = discord.ui.TextInput(label="인원 (0~99, 0 = 제한 없음)", max_length=2,
+                                          default=str(channel.user_limit))
+        self.add_item(self.limit)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_owner(self.channel, interaction.user):
+            await interaction.response.send_message("방장만 바꿀 수 있어요.", ephemeral=True)
+            return
+        value = self.limit.value.strip()
+        if not value.isdigit() or not 0 <= int(value) <= 99:
+            await interaction.response.send_message("0부터 99 사이 숫자로 적어 주세요.", ephemeral=True)
+            return
+        await interaction.response.send_message(await set_limit(self.channel, int(value)), ephemeral=True)
+
+
+class PickMemberView(discord.ui.View):
+    """허용 / 방장넘기기에서 사람 고르는 선택 메뉴 (본인에게만 보임)."""
+
+    def __init__(self, channel: discord.VoiceChannel, mode: str):
+        super().__init__(timeout=120)
+        self.channel, self.mode = channel, mode
+        placeholder = "들어올 수 있게 할 사람" if mode == "allow" else "방장을 넘길 사람 (같은 방에 있어야 해요)"
+        self.select = discord.ui.UserSelect(placeholder=placeholder)
+        self.select.callback = self.picked
+        self.add_item(self.select)
+
+    async def picked(self, interaction: discord.Interaction):
+        if not is_owner(self.channel, interaction.user):
+            await interaction.response.edit_message(content="이제 방장이 아니라서 할 수 없어요.", view=None)
+            return
+        target = self.select.values[0]
+        if not isinstance(target, discord.Member):
+            target = interaction.guild.get_member(target.id)
+        if target is None:
+            await interaction.response.edit_message(content="그 사람을 찾지 못했어요.", view=None)
+            return
+        if self.mode == "allow":
+            await interaction.response.edit_message(
+                content=await allow_member(self.channel, target, interaction.user), view=None)
+        else:
+            problem = transfer_problem(self.channel, interaction.user, target)
+            if problem:
+                await interaction.response.edit_message(content=problem, view=None)
+                return
+            await interaction.response.edit_message(content=f"{target.mention}님에게 방장을 넘겼어요.", view=None)
+            await transfer_owner(self.channel, target)
+
+
+def is_owner(channel: discord.VoiceChannel, user) -> bool:
+    room = store.room(channel.id)
+    return bool(room) and room["owner"] == user.id
+
+
+async def handle_panel(interaction: discord.Interaction, action: str, channel_id: int):
+    ch = interaction.guild.get_channel(channel_id)
+    if ch is None or not store.room(channel_id):
+        await interaction.response.send_message("이미 사라진 통화방이에요.", ephemeral=True)
+        return
+    if not is_owner(ch, interaction.user):
+        await interaction.response.send_message(f"방장(<@{store.room(channel_id)['owner']}>)만 누를 수 있어요.",
+                                                ephemeral=True)
+        return
+    if action == "lock":
+        await interaction.response.defer(ephemeral=True)
+        await lock_room(ch, interaction.user)
+        await interaction.followup.send("🔒 잠갔어요. 친구는 ✅ 허용으로 들일 수 있어요.", ephemeral=True)
+    elif action == "unlock":
+        await interaction.response.defer(ephemeral=True)
+        await unlock_room(ch)
+        await interaction.followup.send("🔓 공개로 바꿨어요.", ephemeral=True)
+    elif action == "rename":
+        await interaction.response.send_modal(RenameModal(ch))
+    elif action == "limit":
+        await interaction.response.send_modal(LimitModal(ch))
+    elif action in ("allow", "transfer"):
+        label = "누구를 들어오게 할까요?" if action == "allow" else "누구에게 방장을 넘길까요?"
+        await interaction.response.send_message(label, view=PickMemberView(ch, action), ephemeral=True)
 
 
 # ─────────────────────────────── 구인구직 ───────────────────────────────
@@ -259,8 +490,8 @@ async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.
     else:
         status = "open"
     icon = None
-    entry = store.game_icons(info["guild"]).get(game_key(info["game"])) if info.get("game") and info.get("guild") else None
-    if entry and os.path.exists(entry["file"]):
+    entry = store.game(info["guild"], info.get("game"))
+    if entry and entry.get("file") and os.path.exists(entry["file"]):
         with open(entry["file"], "rb") as f:
             icon = f.read()
     buf = await asyncio.to_thread(
@@ -297,7 +528,7 @@ async def fetch_post_message(info: dict):
 
 
 async def refresh_post(voice_id: int):
-    """통화방 인원이 바뀌면 구인 글 인원 갱신, 방이 비면 자동 마감."""
+    """통화방 인원이 바뀌면 구인 글 이미지 갱신, 방이 비면 자동 마감."""
     info = store.post(voice_id)
     if not info:
         return
@@ -330,6 +561,19 @@ async def close_post(voice_id: int):
         pass
 
 
+async def handle_recruit_close(interaction: discord.Interaction, voice_id: int):
+    info = store.post(voice_id)
+    if not info:
+        await interaction.response.send_message("이미 마감된 구인 글이에요.", ephemeral=True)
+        return
+    is_admin = interaction.user.guild_permissions.manage_messages
+    if interaction.user.id != info["author"] and not is_admin:
+        await interaction.response.send_message("구인 글을 올린 사람만 마감할 수 있어요.", ephemeral=True)
+        return
+    await interaction.response.send_message("구인을 마감했어요.", ephemeral=True)
+    await close_post(voice_id)
+
+
 # ─────────────────────────────── 이벤트 ───────────────────────────────
 @bot.event
 async def on_ready():
@@ -353,13 +597,15 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     guild = member.guild
 
     # 1) 생성 채널에 들어옴 → 방 만들고 이동
-    if after.channel and after.channel.id == store.hub(guild.id):
+    hub = store.hubs(guild.id).get(str(after.channel.id)) if after.channel else None
+    if hub is not None:
         async with user_lock(member.id):
             room = existing_room(guild, member)
             created = room is None
             if created:
                 try:
-                    room = await create_room(member, after.channel.category)
+                    room = await create_room(member, after.channel.category,
+                                             limit=hub.get("limit", 0), game=hub.get("game"))
                 except discord.HTTPException as e:
                     log.warning("방 생성 실패: %s", e)
                     return
@@ -390,33 +636,53 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    """구인 글 '마감' 버튼 (봇이 재시작돼도 동작하도록 custom_id로 처리)."""
+    """패널·구인 마감 버튼 (봇이 재시작돼도 동작하도록 custom_id로 처리)."""
     if interaction.type != discord.InteractionType.component:
         return
     custom_id = (interaction.data or {}).get("custom_id", "")
-    if not custom_id.startswith("recruit_close:"):
-        return
-    voice_id = int(custom_id.split(":", 1)[1])
-    info = store.post(voice_id)
-    if not info:
-        await interaction.response.send_message("이미 마감된 구인 글이에요.", ephemeral=True)
-        return
-    is_admin = interaction.user.guild_permissions.manage_messages
-    if interaction.user.id != info["author"] and not is_admin:
-        await interaction.response.send_message("구인 글을 올린 사람만 마감할 수 있어요.", ephemeral=True)
-        return
-    await interaction.response.send_message("구인을 마감했어요.", ephemeral=True)
-    await close_post(voice_id)
+    try:
+        if custom_id.startswith("recruit_close:"):
+            await handle_recruit_close(interaction, int(custom_id.split(":")[1]))
+        elif custom_id.startswith("panel:"):
+            _, action, cid = custom_id.split(":")
+            await handle_panel(interaction, action, int(cid))
+    except discord.HTTPException as e:
+        log.warning("버튼 처리 실패 %s: %s", custom_id, e)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("처리하지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
 
 
 @bot.event
 async def on_guild_channel_delete(channel):
     store.remove_room(channel.id)
     await close_post(channel.id)
+    store.remove_hub(channel.guild.id, channel.id)
     if store.recruit_channel(channel.guild.id) == channel.id:
         store.set_recruit_channel(channel.guild.id, None)
-    if store.hub(channel.guild.id) == channel.id:
-        store.set_hub(channel.guild.id, None)
+
+
+# ─────────────────────────────── 게임 자동완성 ───────────────────────────────
+async def game_autocomplete(interaction: discord.Interaction, current: str):
+    names = [e["name"] for e in store.games(interaction.guild_id).values()]
+    key = game_key(current)
+    return [app_commands.Choice(name=n, value=n) for n in sorted(names) if key in game_key(n)][:25]
+
+
+async def resolve_game(interaction: discord.Interaction, name: str | None):
+    """등록된 게임이면 표시 이름을 돌려주고, 아니면 안내 후 False."""
+    if not name:
+        return None
+    entry = store.game(interaction.guild.id, name)
+    if entry:
+        return entry["name"]
+    names = ", ".join(sorted(e["name"] for e in store.games(interaction.guild.id).values())) or "아직 없음"
+    msg = (f"**{name}**은(는) 등록된 게임이 아니에요. 목록에서 골라 주세요.\n"
+           f"등록된 게임: {names}\n(관리자는 `/통화방설정 게임추가`로 등록할 수 있어요)")
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
+    return False
 
 
 # ─────────────────────────────── /통화방 ───────────────────────────────
@@ -432,10 +698,15 @@ async def owned_room(interaction: discord.Interaction):
 
 
 @room_group.command(name="생성", description="내 통화방을 만들어요")
-@app_commands.describe(이름="방 이름 (비우면 'OOO의 통화방')", 인원="인원 제한 (0 = 제한 없음)")
+@app_commands.describe(이름="방 이름 (비우면 'OOO의 통화방')", 인원="인원 제한 (0 = 제한 없음)",
+                       게임="등록된 게임 중에서 고르기 (선택)")
+@app_commands.autocomplete(게임=game_autocomplete)
 async def cmd_create(interaction: discord.Interaction, 이름: str | None = None,
-                     인원: app_commands.Range[int, 0, 99] = 0):
+                     인원: app_commands.Range[int, 0, 99] = 0, 게임: str | None = None):
     member = interaction.user
+    game = await resolve_game(interaction, 게임)
+    if game is False:
+        return
     async with user_lock(member.id):
         ch = existing_room(interaction.guild, member)
         if ch:
@@ -444,7 +715,7 @@ async def cmd_create(interaction: discord.Interaction, 이름: str | None = None
         await interaction.response.defer(ephemeral=True)
         category = pick_category(interaction.guild, member, interaction.channel)
         try:
-            ch = await create_room(member, category, name=이름, limit=인원)
+            ch = await create_room(member, category, name=이름, limit=인원, game=game)
         except discord.HTTPException:
             await interaction.followup.send("방을 만들지 못했어요. 봇 권한(채널 관리)을 확인해 주세요.", ephemeral=True)
             return
@@ -467,11 +738,7 @@ async def cmd_rename(interaction: discord.Interaction, 새이름: app_commands.R
     if not ch:
         return
     await interaction.response.defer(ephemeral=True)
-    if await try_rename(ch, 새이름):
-        store.update_room(ch.id, custom_name=True)
-        await interaction.followup.send(f"이름을 **{새이름}**(으)로 바꿨어요.", ephemeral=True)
-    else:
-        await interaction.followup.send("디스코드 제한으로 채널 이름은 10분에 2번까지만 바꿀 수 있어요. 잠시 뒤에 다시 해 주세요.", ephemeral=True)
+    await interaction.followup.send(await rename_room(ch, 새이름), ephemeral=True)
 
 
 @room_group.command(name="인원", description="내 통화방 인원 제한을 바꿔요 (0 = 제한 없음)")
@@ -479,8 +746,7 @@ async def cmd_limit(interaction: discord.Interaction, 인원: app_commands.Range
     ch = await owned_room(interaction)
     if not ch:
         return
-    await ch.edit(user_limit=인원)
-    await interaction.response.send_message("인원 제한을 없앴어요." if 인원 == 0 else f"인원을 **{인원}명**으로 제한했어요.", ephemeral=True)
+    await interaction.response.send_message(await set_limit(ch, 인원), ephemeral=True)
 
 
 @room_group.command(name="잠금", description="지금 있는 사람 말고는 못 들어오게 잠가요")
@@ -488,21 +754,9 @@ async def cmd_lock(interaction: discord.Interaction):
     ch = await owned_room(interaction)
     if not ch:
         return
-    guild = interaction.guild
-    overwrites = dict(ch.overwrites)
-    # 모든 역할(@everyone 포함)은 입장 금지
-    for target in [guild.default_role] + [t for t in overwrites if isinstance(t, discord.Role)]:
-        ow = overwrites.get(target, discord.PermissionOverwrite())
-        ow.connect = False
-        overwrites[target] = ow
-    # 지금 있는 사람, 방장, 봇은 허용
-    for m in set(ch.members) | {interaction.user, guild.me}:
-        ow = overwrites.get(m, discord.PermissionOverwrite())
-        ow.connect = True
-        overwrites[m] = ow
-    await ch.edit(overwrites=overwrites)
-    store.update_room(ch.id, locked=True)
-    await interaction.response.send_message("🔒 잠갔어요. 친구를 들이려면 `/통화방 허용`을 써 주세요.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    await lock_room(ch, interaction.user)
+    await interaction.followup.send("🔒 잠갔어요. 친구를 들이려면 `/통화방 허용`을 써 주세요.", ephemeral=True)
 
 
 @room_group.command(name="공개", description="잠금을 풀어서 누구나 들어올 수 있게 해요")
@@ -510,10 +764,9 @@ async def cmd_unlock(interaction: discord.Interaction):
     ch = await owned_room(interaction)
     if not ch:
         return
-    # 카테고리 기본 권한으로 되돌림
-    await ch.edit(overwrites=dict(ch.category.overwrites) if ch.category else {})
-    store.update_room(ch.id, locked=False)
-    await interaction.response.send_message("🔓 공개로 바꿨어요.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    await unlock_room(ch)
+    await interaction.followup.send("🔓 공개로 바꿨어요.", ephemeral=True)
 
 
 @room_group.command(name="허용", description="잠긴 내 통화방에 특정 사람이 들어올 수 있게 해요")
@@ -521,9 +774,7 @@ async def cmd_allow(interaction: discord.Interaction, 멤버: discord.Member):
     ch = await owned_room(interaction)
     if not ch:
         return
-    await ch.set_permissions(멤버, connect=True, reason=f"{interaction.user} 허용")
-    extra = "" if store.room(ch.id)["locked"] else " (지금은 공개 상태라 원래 누구나 들어올 수 있어요)"
-    await interaction.response.send_message(f"{멤버.mention}님이 {ch.mention}에 들어올 수 있어요.{extra}", ephemeral=True)
+    await interaction.response.send_message(await allow_member(ch, 멤버, interaction.user), ephemeral=True)
 
 
 @room_group.command(name="방장넘기기", description="같은 방에 있는 사람에게 방장을 넘겨요")
@@ -531,17 +782,21 @@ async def cmd_transfer(interaction: discord.Interaction, 멤버: discord.Member)
     ch = await owned_room(interaction)
     if not ch:
         return
-    if 멤버.bot or 멤버 == interaction.user:
-        await interaction.response.send_message("다른 사람(봇 제외)에게만 넘길 수 있어요.", ephemeral=True)
-        return
-    if 멤버 not in ch.members:
-        await interaction.response.send_message(f"{멤버.mention}님이 {ch.mention}에 있어야 넘길 수 있어요.", ephemeral=True)
-        return
-    if store.room_of_owner(interaction.guild.id, 멤버.id) is not None:
-        await interaction.response.send_message("그 사람은 이미 다른 방의 방장이에요.", ephemeral=True)
+    problem = transfer_problem(ch, interaction.user, 멤버)
+    if problem:
+        await interaction.response.send_message(problem, ephemeral=True)
         return
     await interaction.response.send_message(f"{멤버.mention}님에게 방장을 넘겼어요.", ephemeral=True)
     await transfer_owner(ch, 멤버)
+
+
+@room_group.command(name="패널", description="내 통화방 컨트롤 패널을 다시 올려요")
+async def cmd_panel(interaction: discord.Interaction):
+    ch = await owned_room(interaction)
+    if not ch:
+        return
+    await send_panel(ch, interaction.user)
+    await interaction.response.send_message(f"{ch.mention} 채팅에 패널을 올렸어요.", ephemeral=True)
 
 
 @room_group.command(name="정보", description="지금 있는 통화방(또는 내 방) 정보를 보여줘요")
@@ -559,12 +814,14 @@ async def cmd_info(interaction: discord.Interaction):
     embed.add_field(name="방장", value=f"<@{room['owner']}>")
     embed.add_field(name="인원", value=f"{len(ch.members)} / {ch.user_limit or '제한 없음'}")
     embed.add_field(name="상태", value="🔒 잠금" if room["locked"] else "🔓 공개")
+    if room.get("game"):
+        embed.add_field(name="게임", value=room["game"])
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ─────────────────────────────── /통화방설정 (관리자) ───────────────────────────────
 setup_group = app_commands.Group(
-    name="통화방설정", description="통화방 생성 채널 설정 (관리자)", guild_only=True,
+    name="통화방설정", description="통화방 봇 설정 (관리자)", guild_only=True,
     default_permissions=discord.Permissions(manage_guild=True),
 )
 
@@ -573,22 +830,69 @@ setup_group = app_commands.Group(
 async def cmd_setup_make(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
-    category = await guild.create_category("통화방", reason="통화방 봇 설정")
+    category = first_hub_category(guild) or await guild.create_category("통화방", reason="통화방 봇 설정")
     hub = await guild.create_voice_channel("➕ 통화방 만들기", category=category, reason="통화방 봇 설정")
     store.set_hub(guild.id, hub.id)
     await interaction.followup.send(f"{hub.mention} 만들었어요! 여기 들어가면 개인 통화방이 생겨요.", ephemeral=True)
 
 
-@setup_group.command(name="지정", description="이미 있는 음성 채널을 생성 채널로 지정해요")
-async def cmd_setup_set(interaction: discord.Interaction, 채널: discord.VoiceChannel):
-    store.set_hub(interaction.guild.id, 채널.id)
-    await interaction.response.send_message(f"{채널.mention}을(를) 생성 채널로 지정했어요. 새 방은 같은 카테고리에 생겨요.", ephemeral=True)
+@setup_group.command(name="게임채널", description="게임별 생성 채널을 만들어요 (예: ➕ 발로란트 5인방)")
+@app_commands.describe(게임="등록된 게임", 인원="만들어질 방 인원 제한 (0 = 제한 없음)", 채널이름="비우면 '➕ 게임 N인방'")
+@app_commands.autocomplete(게임=game_autocomplete)
+async def cmd_setup_game_hub(interaction: discord.Interaction, 게임: str, 인원: app_commands.Range[int, 0, 99],
+                             채널이름: app_commands.Range[str, 1, 100] | None = None):
+    game = await resolve_game(interaction, 게임)
+    if not game:
+        return
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    category = first_hub_category(guild) or await guild.create_category("통화방", reason="통화방 봇 설정")
+    name = 채널이름 or (f"➕ {game} {인원}인방" if 인원 else f"➕ {game}")
+    hub = await guild.create_voice_channel(name[:100], category=category, reason="통화방 봇 게임 채널")
+    store.set_hub(guild.id, hub.id, game=game, limit=인원)
+    limit_text = f"인원 {인원}명 제한" if 인원 else "인원 제한 없음"
+    await interaction.followup.send(f"{hub.mention} 만들었어요! 들어가면 'OOO의 {game}' 방이 생겨요 ({limit_text}).",
+                                    ephemeral=True)
+
+
+@setup_group.command(name="지정", description="이미 있는 음성 채널을 생성 채널로 지정해요 (게임 지정 가능)")
+@app_commands.describe(채널="생성 채널로 쓸 음성 채널", 게임="등록된 게임 (선택)", 인원="만들어질 방 인원 제한")
+@app_commands.autocomplete(게임=game_autocomplete)
+async def cmd_setup_set(interaction: discord.Interaction, 채널: discord.VoiceChannel, 게임: str | None = None,
+                        인원: app_commands.Range[int, 0, 99] = 0):
+    game = await resolve_game(interaction, 게임)
+    if game is False:
+        return
+    store.set_hub(interaction.guild.id, 채널.id, game=game, limit=인원)
+    await interaction.response.send_message(f"{채널.mention}을(를) 생성 채널로 지정했어요. 새 방은 같은 카테고리에 생겨요.",
+                                            ephemeral=True)
 
 
 @setup_group.command(name="해제", description="생성 채널 지정을 해제해요 (채널은 지우지 않아요)")
-async def cmd_setup_clear(interaction: discord.Interaction):
-    store.set_hub(interaction.guild.id, None)
-    await interaction.response.send_message("생성 채널 지정을 해제했어요.", ephemeral=True)
+async def cmd_setup_clear(interaction: discord.Interaction, 채널: discord.VoiceChannel):
+    if store.remove_hub(interaction.guild.id, 채널.id):
+        await interaction.response.send_message(f"{채널.mention} 생성 채널 지정을 해제했어요.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"{채널.mention}은(는) 생성 채널이 아니에요.", ephemeral=True)
+
+
+@setup_group.command(name="목록", description="생성 채널·등록된 게임·구인 채널을 보여줘요")
+async def cmd_setup_list(interaction: discord.Interaction):
+    gid = interaction.guild.id
+    hub_lines = []
+    for cid, cfg in store.hubs(gid).items():
+        detail = cfg.get("game") or "일반"
+        if cfg.get("limit"):
+            detail += f", {cfg['limit']}명"
+        hub_lines.append(f"<#{cid}> ({detail})")
+    game_lines = [f"{e['name']}{' 🖼️' if e.get('file') else ''}" for e in store.games(gid).values()]
+    recruit = store.recruit_channel(gid)
+    embed = discord.Embed(title="통화방 봇 설정", color=discord.Color.blurple())
+    embed.add_field(name="생성 채널", value="\n".join(hub_lines) or "없음 (`/통화방설정 만들기`)", inline=False)
+    embed.add_field(name="등록된 게임 (🖼️ = 아이콘 있음)",
+                    value=", ".join(sorted(game_lines)) or "없음 (`/통화방설정 게임추가`)", inline=False)
+    embed.add_field(name="구인 채널", value=f"<#{recruit}>" if recruit else "명령어 친 채널", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @setup_group.command(name="구인채널", description="구인 글이 올라갈 채팅 채널을 정해요 (안 정하면 명령어 친 채널)")
@@ -598,31 +902,32 @@ async def cmd_setup_recruit(interaction: discord.Interaction, 채널: discord.Te
     await interaction.response.send_message(msg, ephemeral=True)
 
 
-async def game_autocomplete(interaction: discord.Interaction, current: str):
-    names = [e["name"] for e in store.game_icons(interaction.guild_id).values()]
-    key = game_key(current)
-    return [app_commands.Choice(name=n, value=n) for n in sorted(names) if key in game_key(n)][:25]
-
-
-@setup_group.command(name="게임아이콘", description="구인 이미지에 나올 게임 아이콘을 등록해요")
-@app_commands.describe(게임="게임 이름 (예: 발로란트)", 이미지="아이콘 이미지 (PNG/JPG, 정사각형 추천)")
-async def cmd_setup_icon(interaction: discord.Interaction, 게임: app_commands.Range[str, 1, 50],
-                         이미지: discord.Attachment):
-    if not (이미지.content_type or "").startswith("image/") or 이미지.size > 5 * 1024 * 1024:
-        await interaction.response.send_message("5MB 이하 이미지 파일(PNG/JPG)만 올릴 수 있어요.", ephemeral=True)
+@setup_group.command(name="게임추가", description="게임을 등록해요 (아이콘은 선택, 이미 있는 게임이면 아이콘만 바꿔요)")
+@app_commands.describe(게임="게임 이름 (예: 발로란트)", 아이콘="구인 이미지에 나올 아이콘 (PNG/JPG, 선택)")
+@app_commands.autocomplete(게임=game_autocomplete)
+async def cmd_setup_game_add(interaction: discord.Interaction, 게임: app_commands.Range[str, 1, 50],
+                             아이콘: discord.Attachment | None = None):
+    gid = interaction.guild.id
+    old = store.game(gid, 게임)
+    name = old["name"] if old else 게임.strip()
+    if 아이콘 is None:
+        store.set_game(gid, name, old.get("file") if old else None)
+        await interaction.response.send_message(f"**{name}** 게임을 등록했어요.", ephemeral=True)
+        return
+    if not (아이콘.content_type or "").startswith("image/") or 아이콘.size > 5 * 1024 * 1024:
+        await interaction.response.send_message("아이콘은 5MB 이하 이미지 파일(PNG/JPG)만 올릴 수 있어요.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
-    data = await 이미지.read()
+    data = await 아이콘.read()
 
     def save():
         from PIL import Image
-        import io as _io
-        im = Image.open(_io.BytesIO(data)).convert("RGBA")
+        im = Image.open(io.BytesIO(data)).convert("RGBA")
         side = min(im.size)  # 가운데 기준 정사각형으로 자르기
         left, top = (im.width - side) // 2, (im.height - side) // 2
         im = im.crop((left, top, left + side, top + side)).resize((256, 256), Image.LANCZOS)
         os.makedirs(ICON_DIR, exist_ok=True)
-        path = os.path.join(ICON_DIR, f"{interaction.guild.id}_{hashlib.md5(game_key(게임).encode()).hexdigest()[:12]}.png")
+        path = os.path.join(ICON_DIR, f"{gid}_{hashlib.md5(game_key(name).encode()).hexdigest()[:12]}.png")
         im.save(path, "PNG")
         return path
 
@@ -631,45 +936,48 @@ async def cmd_setup_icon(interaction: discord.Interaction, 게임: app_commands.
     except Exception:
         await interaction.followup.send("이미지를 읽지 못했어요. 다른 파일로 해 주세요.", ephemeral=True)
         return
-    old = store.game_icons(interaction.guild.id).get(game_key(게임))
-    if old and old["file"] != path and os.path.exists(old["file"]):
-        os.remove(old["file"])
-    store.set_game_icon(interaction.guild.id, 게임, path)
-    await interaction.followup.send(f"**{게임}** 아이콘을 등록했어요. `/구인`에서 게임을 고를 때 목록에 떠요.", ephemeral=True)
+    store.set_game(gid, name, path)
+    await interaction.followup.send(f"**{name}** 게임을 아이콘과 함께 등록했어요.", ephemeral=True)
 
 
-@setup_group.command(name="게임아이콘삭제", description="등록한 게임 아이콘을 지워요")
-async def cmd_setup_icon_remove(interaction: discord.Interaction, 게임: str):
-    entry = store.game_icons(interaction.guild.id).get(game_key(게임))
+@setup_group.command(name="게임삭제", description="등록한 게임을 지워요")
+@app_commands.autocomplete(게임=game_autocomplete)
+async def cmd_setup_game_remove(interaction: discord.Interaction, 게임: str):
+    entry = store.game(interaction.guild.id, 게임)
     if not entry:
-        await interaction.response.send_message("등록된 아이콘이 없어요.", ephemeral=True)
+        await interaction.response.send_message("등록된 게임이 아니에요.", ephemeral=True)
         return
-    if os.path.exists(entry["file"]):
+    if entry.get("file") and os.path.exists(entry["file"]):
         os.remove(entry["file"])
-    store.set_game_icon(interaction.guild.id, 게임, None)
-    await interaction.response.send_message(f"**{entry['name']}** 아이콘을 지웠어요.", ephemeral=True)
-
-
-cmd_setup_icon_remove.autocomplete("게임")(game_autocomplete)
+    store.remove_game(interaction.guild.id, 게임)
+    await interaction.response.send_message(
+        f"**{entry['name']}** 게임을 지웠어요. 이 게임으로 만든 생성 채널이 있으면 `/통화방설정 해제`로 정리해 주세요.",
+        ephemeral=True)
 
 
 # ─────────────────────────────── /구인 ───────────────────────────────
 @bot.tree.command(name="구인", description="지금 있는 통화방으로 같이 할 사람을 구해요")
 @app_commands.guild_only()
 @app_commands.describe(
-    내용="예: 발로 경쟁 같이 하실 분, 골드~플래",
+    내용="예: 경쟁 같이 하실 분, 골드~플래",
     인원="몇 명 더 구할지",
-    게임="게임 이름 (선택)",
+    게임="등록된 게임 중에서 고르기 (게임 방이면 자동으로 채워져요)",
     멘션역할="알림 보낼 역할 (선택)",
 )
+@app_commands.autocomplete(게임=game_autocomplete)
 async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Range[str, 1, 300],
-                      인원: app_commands.Range[int, 1, 20], 게임: app_commands.Range[str, 1, 50] | None = None,
+                      인원: app_commands.Range[int, 1, 20], 게임: str | None = None,
                       멘션역할: discord.Role | None = None):
     member = interaction.user
     voice = member.voice.channel if member.voice and member.voice.channel else existing_room(interaction.guild, member)
     if voice is None:
         await interaction.response.send_message("음성 채널에 들어가 있거나 내 통화방이 있어야 구인할 수 있어요.", ephemeral=True)
         return
+    game = await resolve_game(interaction, 게임)
+    if game is False:
+        return
+    if game is None and store.room(voice.id):  # 게임 방이면 그 게임으로
+        game = store.room(voice.id).get("game")
 
     target_id = store.recruit_channel(interaction.guild.id)
     target = interaction.guild.get_channel(target_id) if target_id else interaction.channel
@@ -682,11 +990,8 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     await close_post(voice.id)
 
     current = len(humans(voice))
-    if 게임:  # 등록된 게임이면 등록된 표기로 맞춤
-        entry = store.game_icons(interaction.guild.id).get(game_key(게임))
-        게임 = entry["name"] if entry else 게임
     info = {"voice": voice.id, "voice_name": voice.name, "author": member.id, "guild": interaction.guild.id,
-            "author_name": member.display_name, "content": 내용, "game": 게임, "target": current + 인원}
+            "author_name": member.display_name, "content": 내용, "game": game, "target": current + 인원}
     header = f"{멘션역할.mention} " if 멘션역할 else ""
     try:
         msg = await target.send(
@@ -701,9 +1006,6 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     info.update(channel=target.id, message=msg.id)
     store.set_post(voice.id, **info)
     await interaction.followup.send(f"구인 글을 올렸어요: {msg.jump_url}", ephemeral=True)
-
-
-cmd_recruit.autocomplete("게임")(game_autocomplete)
 
 
 @bot.tree.command(name="구인마감", description="내가 올린 구인 글을 마감해요")

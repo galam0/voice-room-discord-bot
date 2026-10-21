@@ -226,6 +226,13 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     store.set_post(voice.id, **info)
     await admin_log(interaction.guild, f"📢 구인 · {member.mention} · {voice.mention} · {msg.jump_url}")
     done = f"구인 글 올렸어요! {msg.jump_url}"
+    # 봇이 만든 통화방이면 방 인원 제한도 구인 인원으로 맞춤 (서버의 일반 음성 채널은 안 건드림)
+    if store.room(voice.id) and voice.user_limit != 인원:
+        try:
+            await voice.edit(user_limit=인원)
+            done += f"\n방 인원도 {인원}명으로 맞췄어요!"
+        except discord.HTTPException:
+            done += f"\n⚠️ 방 인원을 {인원}명으로 못 바꿨어요. 봇 권한을 확인해 보세요."
     if roles and not mention_ok(interaction.guild, roles, target):
         done += "\n⚠️ 역할 멘션 알림이 안 갔을 수도 있어요. 관리자에게 그 역할의 '@멘션 허용'을 켜 달라고 하세요."
     await interaction.followup.send(done, ephemeral=True)

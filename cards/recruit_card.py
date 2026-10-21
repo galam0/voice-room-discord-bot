@@ -316,14 +316,14 @@ def circle_avatar(data: bytes | None, name: str, size: int, color):
     return img
 
 
-ICON = 76  # 게임 아이콘 크기
+ICON = 100  # 게임 아이콘 크기
 
 
 def game_icon(data: bytes | None, name: str, color):
     """등록된 아이콘(둥근 사각형) 또는 첫 글자 기본 아이콘."""
     size = ICON
     mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size - 1, size - 1), radius=18, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size - 1, size - 1), radius=24, fill=255)
     face = None
     if data:
         try:
@@ -333,7 +333,7 @@ def game_icon(data: bytes | None, name: str, color):
     if face is None:
         face = Image.new("RGBA", (size, size), color + (255,))
         ImageDraw.Draw(face).text((size / 2, size / 2), initial(name),
-                                  font=font(40, True), fill=(255, 255, 255), anchor="mm")
+                                  font=font(52, True), fill=(255, 255, 255), anchor="mm")
     else:
         bg = Image.new("RGBA", (size, size), PANEL + (255,))
         face = Image.alpha_composite(bg, face)
@@ -389,10 +389,10 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     f_st = font(30, True)
     st_w = text_w(d, st, f_st) + 36
     pill(d, W - PAD - st_w, y + (ICON - 52) / 2, st, f_st, PANEL, color=accent, h=52)
-    title_x = PAD + ICON + 20
+    title_x = PAD + ICON + 24
     rich_draw(img, d, (title_x, y + ICON / 2),
-              rich_ellipsize(d, atoms(title), font(34, True), W - PAD - st_w - 20 - title_x),
-              font(34, True), TEXT, anchor="lm")
+              rich_ellipsize(d, atoms(title), font(44, True), W - PAD - st_w - 20 - title_x),
+              font(44, True), TEXT, anchor="lm")
 
     # 내용 (박스로 강조)
     y += ICON + 28

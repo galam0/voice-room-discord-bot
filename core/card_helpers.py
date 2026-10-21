@@ -8,7 +8,6 @@ import discord
 from core.client import bot
 
 
-# ─────────────────────────────── 구인구직 ───────────────────────────────
 async def _avatar_bytes(member: discord.Member):
     try:
         asset = member.display_avatar.replace(size=128, static_format="png")

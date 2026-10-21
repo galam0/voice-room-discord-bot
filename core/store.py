@@ -16,11 +16,17 @@ class Store:
     """
     data.json 구조
     guilds[서버ID]:
-        hubs:   {생성채널ID: {"game": 게임 이름 또는 None, "limit": 인원 제한}}
-        games:  {게임키: {"name": 표시 이름, "file": 아이콘 파일 경로 또는 None}}
-        recruit: 구인 글 채널ID
-    rooms[방ID]: {"owner", "guild", "custom_name", "locked", "game"}
-    posts[음성채널ID]: 구인 글 정보
+        hubs:          {생성채널ID: {"game", "limit", "category"}}
+        games:         {게임키: {"name": 표시 이름, "file": 아이콘 파일 경로, "role": 자동 멘션 역할ID}}
+        recruit:       구인·예약 글 채널ID
+        room_category: 방이 생길 기본 카테고리ID
+        log:           관리자 로그 채널ID
+        auto_roles:    [들어올 때 줄 역할ID]
+    rooms[방ID]:          {"owner", "guild", "custom_name", "locked", "game", "hold_until"(예약 방)}
+    posts[음성채널ID]:     구인 글 정보
+    reservations[글ID]:   예약 정보
+    giveaways[글ID]:      추첨 정보
+    menus[글ID]:          역할 메뉴
     """
 
     def __init__(self, path: str):

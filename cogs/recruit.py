@@ -63,6 +63,7 @@ async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.
         footer=None if closed else expire_text(info),
         custom_emojis=await custom_emoji_images(info["content"]),
         status=status,
+        leader=bool(members) and members[0].id == info["author"],
     )
     return discord.File(buf, filename="recruit.png")
 
@@ -233,7 +234,8 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
 @bot.tree.command(name="구인마감", description="내가 올린 구인 글을 마감해요")
 @app_commands.guild_only()
 async def cmd_recruit_close(interaction: discord.Interaction):
-    mine = [int(v) for v, p in store.data["posts"].items() if p["author"] == interaction.user.id]
+    mine = [int(v) for v, p in store.data["posts"].items()
+            if p["author"] == interaction.user.id and p.get("guild") == interaction.guild.id]
     if not mine:
         await interaction.response.send_message("마감할 구인 글이 없어요!", ephemeral=True)
         return

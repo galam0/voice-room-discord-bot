@@ -1,5 +1,7 @@
 """여러 기능에 걸친 디스코드 이벤트 (봇 시작, 음성 입퇴장, 버튼, 채널 삭제, 명령어 기록·오류)"""
 
+import asyncio
+
 from discord import app_commands
 import discord
 
@@ -8,7 +10,8 @@ from core.store import store
 from core.client import bot
 from core.utils import admin_log, existing_room, humans, user_lock
 from cogs.recruit import close_post, expire_posts, handle_recruit_apply, handle_recruit_close, refresh_post
-from cogs.rooms import create_room, delete_room, handle_panel, hub_room_category, transfer_owner
+from cogs.rooms import (create_room, delete_room, handle_panel, hold_left, hub_room_category,
+                        schedule_empty_check, transfer_owner)
 from cogs.reservation import handle_res_cancel, handle_res_join, res_by_room, reservation_tick, update_res_post
 from cogs.giveaway import giveaway_tick
 from cogs.help import COMMAND_IDS
@@ -29,12 +32,16 @@ async def on_ready():
         if ch is None:
             store.remove_room(int(cid))
         elif not humans(ch):
-            await delete_room(ch, "봇 재시작 후 빈 통화방 정리")
+            if hold_left(ch.id):  # 예약 통화방은 시작 15분 뒤까지 둠
+                asyncio.create_task(schedule_empty_check(ch.id, delay=hold_left(ch.id)))
+            else:
+                await delete_room(ch, "봇 재시작 후 빈 통화방 정리")
     for vid in list(store.data["posts"].keys()):
         await refresh_post(int(vid))
-    synced = await bot.tree.sync()
-    COMMAND_IDS.update({c.name: c.id for c in synced})
-    log.info("로그인: %s / 명령어 %d개 동기화", bot.user, len(synced))
+    if not COMMAND_IDS:  # 연결이 끊겼다 다시 붙을 때는 명령어를 다시 올리지 않음
+        synced = await bot.tree.sync()
+        COMMAND_IDS.update({c.name: c.id for c in synced})
+        log.info("로그인: %s / 명령어 %d개 동기화", bot.user, len(synced))
 
 
 @bot.event
@@ -69,7 +76,10 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         room = store.room(channel.id)
         left = humans(channel)
         if not left:
-            await delete_room(channel, "빈 통화방")
+            if hold_left(channel.id):  # 예약 통화방은 시작 15분 뒤까지 둠
+                asyncio.create_task(schedule_empty_check(channel.id, delay=hold_left(channel.id)))
+            else:
+                await delete_room(channel, "빈 통화방")
         elif room["owner"] == member.id:
             # 이미 다른 방을 가진 사람은 피해서 위임
             candidates = [m for m in left if store.room_of_owner(guild.id, m.id) is None] or left
@@ -95,7 +105,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    """패널·구인 마감 버튼 (봇이 재시작돼도 동작하도록 custom_id로 처리)."""
+    """패널·구인·예약 버튼 (봇이 재시작돼도 동작하도록 custom_id로 처리)."""
     if interaction.type != discord.InteractionType.component:
         return
     custom_id = (interaction.data or {}).get("custom_id", "")
@@ -121,7 +131,8 @@ async def on_interaction(interaction: discord.Interaction):
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     store.remove_menu(payload.message_id)
     store.remove_res(payload.message_id)
-    store.data["giveaways"].pop(str(payload.message_id), None)
+    if store.data["giveaways"].pop(str(payload.message_id), None) is not None:
+        store.save()
 
 
 @bot.event

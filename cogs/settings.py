@@ -85,6 +85,7 @@ async def cmd_setup_list(interaction: discord.Interaction):
         if cfg.get("category"):
             detail += f", 📁 <#{cfg['category']}>"
         hub_lines.append(f"<#{cid}> ({detail})")
+
     def game_line(e):
         line = e["name"] + (" 🖼️" if e.get("file") else "")
         return line + (f" <@&{e['role']}>" if e.get("role") else "")
@@ -268,4 +269,6 @@ async def cmd_setup_game_remove(interaction: discord.Interaction, 게임: str):
     await interaction.response.send_message(
         f"**{entry['name']}** 게임 지웠어요! 이 게임 생성 채널이 있으면 `/통화방설정 해제`로 정리해 주세요.",
         ephemeral=True)
+
+
 bot.tree.add_command(setup_group)

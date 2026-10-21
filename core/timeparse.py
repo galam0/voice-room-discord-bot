@@ -16,7 +16,8 @@ TIME_RE = re.compile(
 
 
 def parse_time(text: str, now: datetime):
-    """'21:00', '오후 9시', '내일 20:30', '10/25 21:00' 같은 글자를 시간으로. 못 읽으면 None."""
+    """'21:00', '오후 9시', '내일 20:30', '10/25 21:00' 같은 글자를 시간으로. 못 읽으면 None.
+    '오늘 오후 3시'처럼 날짜를 정해 준 시간은 이미 지났어도 그대로 돌려줘요 (부르는 쪽에서 막음)."""
     m = TIME_RE.match(text or "")
     if not m:
         return None
@@ -33,7 +34,7 @@ def parse_time(text: str, now: datetime):
             t = datetime(now.year, int(m["mon"]), int(m["dd"]), h, mi, tzinfo=TZ)
         except ValueError:
             return None
-        if t < now:
+        if t < now - timedelta(days=180):  # 한참 지난 날짜면 내년 (예: 12월에 '1/5')
             t = t.replace(year=now.year + 1)
         return t
     if m["day"]:

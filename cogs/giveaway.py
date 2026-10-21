@@ -95,7 +95,9 @@ async def finish_giveaway(message_id: int, reroll: bool = False):
         store.save()
         return None
     entrants = await giveaway_entrants(msg)
-    previous = set(g.get("winners", [])) if reroll else set()
+    if reroll:  # 지금까지 당첨된 사람은 모두 빼고
+        g["past_winners"] = sorted(set(g.get("past_winners", [])) | set(g.get("winners", [])))
+    previous = set(g.get("past_winners", [])) if reroll else set()
     pool = [u for u in entrants if u.id not in previous]
     winners = random.sample(pool, min(g["count"], len(pool))) if pool else []
     g.update(ended=True, winners=[w.id for w in winners], ended_at=time.time())
@@ -158,6 +160,9 @@ async def cmd_giveaway_start(interaction: discord.Interaction, 상품: app_comma
                              시간: app_commands.Range[str, 1, 30], 당첨: app_commands.Range[int, 1, 20] = 1,
                              채널: discord.TextChannel | None = None):
     end_at = parse_end(시간)
+    if end_at is not None and end_at <= time.time():
+        await interaction.response.send_message("이미 지난 시간이에요!", ephemeral=True)
+        return
     if end_at is None or end_at - time.time() < 10:
         await interaction.response.send_message("시간을 못 알아들었어요! `10분`, `1시간 30분`, `21:00`처럼 적어 주세요.",
                                                 ephemeral=True)
@@ -192,7 +197,7 @@ async def cmd_giveaway_end(interaction: discord.Interaction, 추첨: str):
     await interaction.followup.send("추첨 끝!", ephemeral=True)
 
 
-@giveaway_group.command(name="다시뽑기", description="끝난 추첨에서 당첨자를 다시 뽑아요 (이전 당첨자 제외)")
+@giveaway_group.command(name="다시뽑기", description="끝난 추첨에서 당첨자를 다시 뽑아요 (지금까지 당첨된 사람 제외)")
 @app_commands.autocomplete(추첨=ended_giveaway_autocomplete)
 async def cmd_giveaway_reroll(interaction: discord.Interaction, 추첨: str):
     g = store.data["giveaways"].get(추첨)
@@ -202,4 +207,6 @@ async def cmd_giveaway_reroll(interaction: discord.Interaction, 추첨: str):
     await interaction.response.defer(ephemeral=True)
     winners = await finish_giveaway(int(추첨), reroll=True)
     await interaction.followup.send("다시 뽑았어요!" if winners else "뽑을 사람이 없어요!", ephemeral=True)
+
+
 bot.tree.add_command(giveaway_group)

@@ -57,7 +57,6 @@ async def res_card_file(res: dict, status: str) -> discord.File:
     if entry and entry.get("file") and os.path.exists(entry["file"]):
         with open(entry["file"], "rb") as f:
             icon = f.read()
-    footer = None
     buf = await asyncio.to_thread(
         recruit_card.render_card,
         icon=icon,
@@ -74,7 +73,7 @@ async def res_card_file(res: dict, status: str) -> discord.File:
         tags=[f"{time_text(res['start_at'])} 시작"] + res.get("tags", [])
              + ([f"대기 {len(res['waitlist'])}명"] if res.get("waitlist") else []),
         meta=f"주최 {res['author_name']}",
-        footer=footer,
+        leader=bool(here) and here[0]["id"] == res["author"],
         custom_emojis=await custom_emoji_images(res["content"]),
     )
     return discord.File(buf, filename="reservation.png")
@@ -99,7 +98,7 @@ def res_view(message_id: int, res: dict, finished: bool = False) -> discord.ui.V
     return view if view.children else None
 
 
-async def update_res_post(message_id: int, res: dict, status: str | None = None, msg=None):
+async def update_res_post(message_id: int, res: dict, status: str | None = None):
     status = status or res_status(res)
     finished = status in ("started", "cancelled")
     await edit_post(res["channel"], message_id, res.get("webhook"),
@@ -136,7 +135,7 @@ async def handle_res_join(interaction: discord.Interaction, message_id: int):
         note = (f"참가 완료! <#{res['room']}>에 들어와 주세요." if res.get("room")
                 else "참가 완료! 시작 10분 전에 통화방이 열리면 멘션해 드릴게요.")
     store.set_res(message_id, res)
-    await update_res_post(message_id, res, msg=interaction.message)
+    await update_res_post(message_id, res)
     await interaction.followup.send(note, ephemeral=True)
     if promoted:
         try:
@@ -157,7 +156,7 @@ async def handle_res_cancel(interaction: discord.Interaction, message_id: int):
         return
     await interaction.response.defer()
     store.remove_res(message_id)
-    await update_res_post(message_id, res, status="cancelled", msg=interaction.message)
+    await update_res_post(message_id, res, status="cancelled")
     await admin_log(interaction.guild, f"📅 예약 취소 · {interaction.user.mention} · {interaction.message.jump_url}")
     await interaction.followup.send("예약 취소!", ephemeral=True)
 
@@ -176,8 +175,10 @@ async def remind_res(message_id: int, res: dict):
             if room is None:
                 room = await create_room(host, pick_category(guild, host, channel),
                                          limit=min(res["target"], 99), game=res.get("game"))
-                # 시작 15분 뒤까지 아무도 없으면 정리
-                asyncio.create_task(schedule_empty_check(room.id, delay=res["start_at"] - time.time() + 900))
+                # 시작 15분 뒤까지는 비어 있어도 두고, 그때도 아무도 없으면 정리
+                hold_until = res["start_at"] + 900
+                store.update_room(room.id, hold_until=hold_until)
+                asyncio.create_task(schedule_empty_check(room.id, delay=hold_until - time.time()))
     except discord.HTTPException as e:
         log.warning("예약 통화방 생성 실패: %s", e)
     res["room"] = room.id if room else None
@@ -239,6 +240,9 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
     if start is None:
         await interaction.response.send_message(
             "시간을 못 알아들었어요! `21:00`, `오후 9시`, `내일 20:30`, `10/25 21:00`처럼 적어 주세요.", ephemeral=True)
+        return
+    if start <= now:
+        await interaction.response.send_message("이미 지난 시간이에요!", ephemeral=True)
         return
     if start - now > timedelta(days=7):
         await interaction.response.send_message("예약은 최대 7일 뒤까지만 돼요!", ephemeral=True)

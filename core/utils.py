@@ -74,5 +74,5 @@ def existing_room(guild: discord.Guild, member: discord.Member):
 
 def mention_ok(guild: discord.Guild, roles, channel=None) -> bool:
     """봇이 이 역할들을 실제로 멘션(알림)할 수 있는지."""
-    perms = (channel or guild).permissions_for(guild.me) if channel else guild.me.guild_permissions
+    perms = channel.permissions_for(guild.me) if channel else guild.me.guild_permissions
     return perms.mention_everyone or all(r.mentionable for r in roles)

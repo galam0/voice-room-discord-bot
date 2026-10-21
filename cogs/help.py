@@ -35,7 +35,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
     ]))
     recruit = discord.Embed(title="📢 구인구직", color=discord.Color.green(), description=(
         "통화방에 들어가 있는 상태에서 쓰면 그 방으로 같이 할 사람을 구하는 **이미지 글**이 올라가요. "
-        "🔊 버튼으로 바로 입장, 참가 버튼으로 참가 신청을 할 수 있어요. 인원이 바뀌면 이미지가 갱신되고, "
+        "참가 버튼을 누르면 통화방에 들어오기 전까지 예정으로 표시돼요. 인원이 바뀌면 이미지가 갱신되고, "
         "방이 비거나 시간이 지나면 자동으로 마감돼요."
     ))
     recruit.add_field(name="명령어", inline=False, value="\n".join([

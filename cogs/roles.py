@@ -265,5 +265,7 @@ async def cmd_auto_role_remove(interaction: discord.Interaction, 역할: str):
     store.save()
     await interaction.response.send_message(f"<@&{rid}> 뺐어요!", ephemeral=True,
                                             allowed_mentions=discord.AllowedMentions.none())
+
+
 bot.tree.add_command(menu_group)
 bot.tree.add_command(auto_role_group)

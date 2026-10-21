@@ -72,31 +72,6 @@ def ellipsize(draw, text, f, max_w):
     return text + "…"
 
 
-def wrap(draw, text, f, max_w, max_lines):
-    """띄어쓰기 기준으로 줄바꿈, 한 단어가 너무 길면 글자 단위로 자름."""
-    lines, line = [], ""
-    for word in text.replace("\n", " ").split(" "):
-        candidate = f"{line} {word}" if line else word
-        if text_w(draw, candidate, f) <= max_w:
-            line = candidate
-            continue
-        if line:
-            lines.append(line)
-        line = ""
-        for ch in word:  # 긴 단어는 글자 단위로
-            if text_w(draw, line + ch, f) > max_w:
-                lines.append(line)
-                line = ch
-            else:
-                line += ch
-    if line:
-        lines.append(line)
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        lines[-1] = ellipsize(draw, lines[-1] + "…", f, max_w)
-    return lines
-
-
 # ─────────────── 이모지 섞인 글자 그리기 ───────────────
 # 기본 이모지는 컬러 이모지 폰트(VM: sudo apt install fonts-noto-color-emoji),
 # 서버 이모지(<:이름:ID>)는 봇이 받아 둔 이미지로 그려요.
@@ -347,7 +322,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
                 tags: list[str] | None = None, applicants: list[tuple[str, bytes | None]] | None = None,
                 footer: str | None = None, custom_emojis: dict | None = None,
                 meta: str | None = None, remaining: int | None = None,
-                count_pending: bool = False) -> io.BytesIO:
+                count_pending: bool = False, leader: bool = True) -> io.BytesIO:
     """
     title: 게임 이름 (없으면 '구인')
     members: 통화방에 있는 사람 [(이름, 아바타 PNG 바이트 또는 None), ...]
@@ -359,6 +334,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     custom_emojis: 서버 이모지 {ID: 이미지 바이트}
     remaining: '모집 중 · N명 더'의 N (안 주면 target - members)
     count_pending: True면 applicants도 인원 수에 넣고 '예정' 글자 없이 흐리게만 그림 (예약용)
+    leader: True면 members 첫 번째 사람에게 구인자(주최자) 금색 테두리
     """
     tags = [t for t in (tags or []) if t]
     applicants = applicants or []
@@ -460,7 +436,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
                     pill(d, cx - 34, sy + SLOT - 26, "예정", f_badge, accent, pad_x=10, h=34)
             else:
                 img.paste(av, (int(x), int(sy)), av)
-                if i == 0:  # 첫 번째 = 구인자
+                if i == 0 and leader:  # 첫 번째 = 구인자
                     d.ellipse((x - 3, sy - 3, x + SLOT + 3, sy + SLOT + 3), outline=(240, 178, 50), width=4)
             rich_draw(img, d, (cx, sy + SLOT + 10), rich_ellipsize(d, atoms(name), f_name, SLOT + gap - 6),
                       f_name, SUB if pending else TEXT, anchor="ma")

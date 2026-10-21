@@ -42,16 +42,28 @@ async def webhook_by_id(webhook_id: int):
     return _webhooks_by_id[webhook_id]
 
 
+def forget_webhook(wh: discord.Webhook):
+    _webhooks_by_id.pop(wh.id, None)
+    for cid, w in list(_webhooks_by_channel.items()):
+        if w.id == wh.id:
+            del _webhooks_by_channel[cid]
+
+
 async def post_as(member: discord.Member, channel, **kwargs):
     """명령어 친 사람 이름·프로필로 글 올리기. 웹후크를 못 쓰면 봇 이름으로. → (메시지, 웹후크ID)"""
-    wh = await channel_webhook(channel)
-    if wh:
+    for _ in range(2):  # 기억해 둔 웹후크를 관리자가 지웠으면 새로 만들어서 한 번 더
+        wh = await channel_webhook(channel)
+        if wh is None:
+            break
         try:
             msg = await wh.send(username=member.display_name[:80], avatar_url=member.display_avatar.url,
                                 wait=True, **kwargs)
             return msg, wh.id
+        except discord.NotFound:
+            forget_webhook(wh)
         except discord.HTTPException as e:
             log.warning("웹후크로 못 올려서 봇 이름으로 올림: %s", e)
+            break
     return await channel.send(**kwargs), None
 
 

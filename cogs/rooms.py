@@ -1,6 +1,7 @@
 """통화방 생성·삭제·방장, 컨트롤 패널, /통화방"""
 
 import asyncio
+import time
 
 from discord import app_commands
 import discord
@@ -82,6 +83,12 @@ async def transfer_owner(channel: discord.VoiceChannel, new_owner: discord.Membe
     if room and not room["custom_name"]:
         # 이름 변경은 제한이 있어서 기다리지 않게 백그라운드로
         asyncio.create_task(try_rename(channel, default_name(new_owner, room.get("game"))))
+
+
+def hold_left(channel_id: int) -> float:
+    """예약 통화방처럼 비어도 잠시 두는 방이면 남은 시간(초), 아니면 0."""
+    room = store.room(channel_id)
+    return max((room or {}).get("hold_until", 0) - time.time(), 0)
 
 
 async def schedule_empty_check(channel_id: int, delay: float | None = None):

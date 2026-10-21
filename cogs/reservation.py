@@ -93,9 +93,6 @@ def res_status(res: dict) -> str:
 
 def res_view(message_id: int, res: dict, finished: bool = False) -> discord.ui.View | None:
     view = discord.ui.View(timeout=None)
-    room = bot.get_channel(res["room"]) if res.get("room") else None
-    if room:
-        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.secondary, custom_id=f"vc_join:{room.id}"))
     if not finished:
         view.add_item(discord.ui.Button(label="참가", style=discord.ButtonStyle.primary, custom_id=f"res_join:{message_id}"))
         view.add_item(discord.ui.Button(label="취소", style=discord.ButtonStyle.danger, custom_id=f"res_cancel:{message_id}"))
@@ -136,7 +133,8 @@ async def handle_res_join(interaction: discord.Interaction, message_id: int):
         note = f"자리가 꽉 차서 대기 {len(waiting)}번이에요!"
     else:
         res["participants"].append({"id": user.id, "name": user.display_name})
-        note = "참가 완료!"
+        note = (f"참가 완료! <#{res['room']}>에 들어와 주세요." if res.get("room")
+                else "참가 완료! 시작 10분 전에 통화방이 열리면 멘션해 드릴게요.")
     store.set_res(message_id, res)
     await update_res_post(message_id, res, msg=interaction.message)
     await interaction.followup.send(note, ephemeral=True)
@@ -186,12 +184,8 @@ async def remind_res(message_id: int, res: dict):
     store.set_res(message_id, res)
     mentions = " ".join(f"<@{p['id']}>" for p in res["participants"])
     where = room.mention if room else ""
-    view = discord.ui.View(timeout=None)
-    if room:
-        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.secondary, custom_id=f"vc_join:{room.id}"))
     try:
         await channel.send(f"⏰ {res.get('game') or '예약'} 10분 후 시작 {where}\n{mentions}",
-                           view=view if room else discord.utils.MISSING,
                            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
     except discord.HTTPException as e:
         log.warning("예약 알림 실패: %s", e)

@@ -67,10 +67,8 @@ async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.
     return discord.File(buf, filename="recruit.png")
 
 
-def recruit_view(info: dict, jump_url: str | None) -> discord.ui.View:
+def recruit_view(info: dict) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
-    if jump_url:
-        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.secondary, custom_id=f"vc_join:{info['voice']}"))
     view.add_item(discord.ui.Button(label="참가", style=discord.ButtonStyle.primary,
                                     custom_id=f"recruit_apply:{info['voice']}"))
     view.add_item(discord.ui.Button(label="마감", style=discord.ButtonStyle.danger,
@@ -92,7 +90,7 @@ async def refresh_post(voice_id: int):
         info["applicants"] = [a for a in info["applicants"] if a["id"] not in ids]
         store.set_post(voice_id, **info)
     ok = await edit_post(info["channel"], info["message"], info.get("webhook"),
-                         attachments=[await recruit_card_file(info, voice)], view=recruit_view(info, voice.jump_url))
+                         attachments=[await recruit_card_file(info, voice)], view=recruit_view(info))
     if not ok:
         store.remove_post(voice_id)
 
@@ -143,7 +141,7 @@ async def handle_recruit_apply(interaction: discord.Interaction, voice_id: int):
         applicants.append({"id": user.id, "name": user.display_name})
         store.set_post(voice_id, **info)
         await interaction.response.send_message(
-            "참가 완료!", ephemeral=True)
+            f"참가 완료! {voice.mention if voice else '통화방'}에 들어와 주세요. 들어오기 전까지는 예정으로 떠요.", ephemeral=True)
         if voice:
             try:
                 await voice.send(f"{user.mention}님이 참가했어요! <@{info['author']}>",
@@ -217,7 +215,7 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
             member, target,
             content=header,
             file=await recruit_card_file(info, voice),
-            view=recruit_view(info, voice.jump_url),
+            view=recruit_view(info),
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )
     except discord.HTTPException:

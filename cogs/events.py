@@ -8,7 +8,7 @@ from core.store import store
 from core.client import bot
 from core.utils import admin_log, existing_room, humans, user_lock
 from cogs.recruit import close_post, expire_posts, handle_recruit_apply, handle_recruit_close, refresh_post
-from cogs.rooms import create_room, delete_room, handle_panel, handle_voice_join, hub_room_category, transfer_owner
+from cogs.rooms import create_room, delete_room, handle_panel, hub_room_category, transfer_owner
 from cogs.reservation import handle_res_cancel, handle_res_join, res_by_room, reservation_tick, update_res_post
 from cogs.giveaway import giveaway_tick
 from cogs.help import COMMAND_IDS
@@ -108,8 +108,6 @@ async def on_interaction(interaction: discord.Interaction):
             await handle_recruit_apply(interaction, int(custom_id.split(":")[1]))
         elif custom_id.startswith("recruit_close:"):
             await handle_recruit_close(interaction, int(custom_id.split(":")[1]))
-        elif custom_id.startswith("vc_join:"):
-            await handle_voice_join(interaction, int(custom_id.split(":")[1]))
         elif custom_id.startswith("panel:"):
             _, action, cid = custom_id.split(":")
             await handle_panel(interaction, action, int(cid))

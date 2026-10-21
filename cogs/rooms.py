@@ -252,38 +252,6 @@ def is_owner(channel: discord.VoiceChannel, user) -> bool:
     return bool(room) and room["owner"] == user.id
 
 
-async def handle_voice_join(interaction: discord.Interaction, channel_id: int):
-    """'통화방 들어가기' 버튼: 음성 채널에 있으면 바로 옮겨 주고, 아니면 링크로 안내."""
-    ch = bot.get_channel(channel_id)
-    if not isinstance(ch, discord.VoiceChannel):
-        await interaction.response.send_message("이미 사라진 통화방이에요!", ephemeral=True)
-        return
-    member = interaction.user
-    if member in ch.members:
-        await interaction.response.send_message("이미 통화방에 있어요!", ephemeral=True)
-        return
-    if not ch.permissions_for(member).connect:
-        await interaction.response.send_message("잠긴 방이에요! 방장한테 허용해 달라고 하세요.", ephemeral=True)
-        return
-    if ch.user_limit and len(ch.members) >= ch.user_limit:
-        await interaction.response.send_message("방이 꽉 찼어요!", ephemeral=True)
-        return
-    if member.voice and member.voice.channel:
-        try:
-            await member.move_to(ch)
-            await interaction.response.send_message(f"{ch.mention}(으)로 옮겼어요!", ephemeral=True)
-            return
-        except discord.HTTPException as e:
-            log.warning("통화방 이동 실패 %s: %s", ch.id, e)
-    # 디스코드는 음성 채널에 없는 사람을 봇이 들여보낼 수 없어서 링크로 안내
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(label="🔊 통화방 열기", style=discord.ButtonStyle.link, url=ch.jump_url))
-    await interaction.response.send_message(
-        "아무 음성 채널에나 들어가 있으면 바로 옮겨 드려요!\n"
-        "지금은 아래 버튼으로 통화방을 열고 '음성 채널 참가'를 눌러 주세요.",
-        view=view, ephemeral=True)
-
-
 async def handle_panel(interaction: discord.Interaction, action: str, channel_id: int):
     ch = interaction.guild.get_channel(channel_id)
     if ch is None or not store.room(channel_id):

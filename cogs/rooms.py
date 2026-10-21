@@ -78,7 +78,7 @@ async def transfer_owner(channel: discord.VoiceChannel, new_owner: discord.Membe
     asyncio.create_task(admin_log(channel.guild, f"👑 방장 변경 · {channel.mention} · {old} → {new_owner.mention}"))
     if room and room["locked"]:
         await channel.set_permissions(new_owner, connect=True, reason="방장 위임")
-    await notify(channel, f"👑 {new_owner.mention}님이 방장이 됐어요.")
+    await notify(channel, f"👑 {new_owner.mention}님이 방장이 됐어요!")
     if room and not room["custom_name"]:
         # 이름 변경은 제한이 있어서 기다리지 않게 백그라운드로
         asyncio.create_task(try_rename(channel, default_name(new_owner, room.get("game"))))
@@ -121,32 +121,32 @@ async def unlock_room(ch: discord.VoiceChannel):
 async def allow_member(ch: discord.VoiceChannel, member: discord.Member, by) -> str:
     await ch.set_permissions(member, connect=True, reason=f"{by} 허용")
     await admin_log(ch.guild, f"✅ 허용 · {ch.mention} · {member.mention}")
-    extra = "" if store.room(ch.id)["locked"] else " (지금은 공개 상태라 원래 누구나 들어올 수 있어요)"
-    return f"{member.mention}님이 {ch.mention}에 들어올 수 있어요.{extra}"
+    extra = "" if store.room(ch.id)["locked"] else " (지금은 공개라 원래 누구나 들어올 수 있어요)"
+    return f"이제 {member.mention}님도 {ch.mention}에 들어올 수 있어요!{extra}"
 
 
 async def rename_room(ch: discord.VoiceChannel, name: str) -> str:
     if await try_rename(ch, name):
         store.update_room(ch.id, custom_name=True)
         await admin_log(ch.guild, f"✏️ 이름 변경 · {ch.mention} · {owner_tag(ch)}")
-        return f"이름을 **{name}**(으)로 바꿨어요."
-    return "디스코드 제한으로 채널 이름은 10분에 2번까지만 바꿀 수 있어요. 잠시 뒤에 다시 해 주세요."
+        return f"이름을 **{name}**(으)로 바꿨어요!"
+    return "이름은 10분에 2번까지만 바꿀 수 있어요! 조금 있다가 다시 해 주세요. (디스코드 제한)"
 
 
 async def set_limit(ch: discord.VoiceChannel, limit: int) -> str:
     await ch.edit(user_limit=limit)
     await admin_log(ch.guild, f"👥 인원 {limit or '제한 없음'} · {ch.mention} · {owner_tag(ch)}")
-    return "인원 제한을 없앴어요." if limit == 0 else f"인원을 **{limit}명**으로 제한했어요."
+    return "인원 제한 없앴어요!" if limit == 0 else f"인원 **{limit}명**으로 바꿨어요!"
 
 
 def transfer_problem(ch: discord.VoiceChannel, actor: discord.Member, target: discord.Member):
     """방장 넘기기가 안 되는 이유 (되면 None)."""
     if target.bot or target.id == actor.id:
-        return "다른 사람(봇 제외)에게만 넘길 수 있어요."
+        return "다른 사람에게만 넘길 수 있어요!"
     if target not in ch.members:
-        return f"{target.mention}님이 {ch.mention}에 있어야 넘길 수 있어요."
+        return f"{target.mention}님이 {ch.mention}에 있어야 넘길 수 있어요!"
     if store.room_of_owner(ch.guild.id, target.id) is not None:
-        return "그 사람은 이미 다른 방의 방장이에요."
+        return "그 사람은 이미 다른 방 방장이에요!"
     return None
 
 
@@ -189,7 +189,7 @@ class RenameModal(discord.ui.Modal, title="통화방 이름 바꾸기"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_owner(self.channel, interaction.user):
-            await interaction.response.send_message("방장만 바꿀 수 있어요.", ephemeral=True)
+            await interaction.response.send_message("방장만 바꿀 수 있어요!", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         await interaction.followup.send(await rename_room(self.channel, self.name.value.strip()), ephemeral=True)
@@ -205,11 +205,11 @@ class LimitModal(discord.ui.Modal, title="인원 제한 바꾸기"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_owner(self.channel, interaction.user):
-            await interaction.response.send_message("방장만 바꿀 수 있어요.", ephemeral=True)
+            await interaction.response.send_message("방장만 바꿀 수 있어요!", ephemeral=True)
             return
         value = self.limit.value.strip()
         if not value.isdigit() or not 0 <= int(value) <= 99:
-            await interaction.response.send_message("0부터 99 사이 숫자로 적어 주세요.", ephemeral=True)
+            await interaction.response.send_message("0~99 사이 숫자로 적어 주세요!", ephemeral=True)
             return
         await interaction.response.send_message(await set_limit(self.channel, int(value)), ephemeral=True)
 
@@ -227,13 +227,13 @@ class PickMemberView(discord.ui.View):
 
     async def picked(self, interaction: discord.Interaction):
         if not is_owner(self.channel, interaction.user):
-            await interaction.response.edit_message(content="이제 방장이 아니라서 할 수 없어요.", view=None)
+            await interaction.response.edit_message(content="이제 방장이 아니에요!", view=None)
             return
         target = self.select.values[0]
         if not isinstance(target, discord.Member):
             target = interaction.guild.get_member(target.id)
         if target is None:
-            await interaction.response.edit_message(content="그 사람을 찾지 못했어요.", view=None)
+            await interaction.response.edit_message(content="그 사람을 못 찾았어요!", view=None)
             return
         if self.mode == "allow":
             await interaction.response.edit_message(
@@ -243,7 +243,7 @@ class PickMemberView(discord.ui.View):
             if problem:
                 await interaction.response.edit_message(content=problem, view=None)
                 return
-            await interaction.response.edit_message(content=f"{target.mention}님에게 방장을 넘겼어요.", view=None)
+            await interaction.response.edit_message(content=f"{target.mention}님에게 방장을 넘겼어요!", view=None)
             await transfer_owner(self.channel, target)
 
 
@@ -252,23 +252,55 @@ def is_owner(channel: discord.VoiceChannel, user) -> bool:
     return bool(room) and room["owner"] == user.id
 
 
+async def handle_voice_join(interaction: discord.Interaction, channel_id: int):
+    """'통화방 들어가기' 버튼: 음성 채널에 있으면 바로 옮겨 주고, 아니면 링크로 안내."""
+    ch = bot.get_channel(channel_id)
+    if not isinstance(ch, discord.VoiceChannel):
+        await interaction.response.send_message("이미 사라진 통화방이에요!", ephemeral=True)
+        return
+    member = interaction.user
+    if member in ch.members:
+        await interaction.response.send_message("이미 통화방에 있어요!", ephemeral=True)
+        return
+    if not ch.permissions_for(member).connect:
+        await interaction.response.send_message("잠긴 방이에요! 방장한테 허용해 달라고 하세요.", ephemeral=True)
+        return
+    if ch.user_limit and len(ch.members) >= ch.user_limit:
+        await interaction.response.send_message("방이 꽉 찼어요!", ephemeral=True)
+        return
+    if member.voice and member.voice.channel:
+        try:
+            await member.move_to(ch)
+            await interaction.response.send_message(f"{ch.mention}(으)로 옮겼어요!", ephemeral=True)
+            return
+        except discord.HTTPException as e:
+            log.warning("통화방 이동 실패 %s: %s", ch.id, e)
+    # 디스코드는 음성 채널에 없는 사람을 봇이 들여보낼 수 없어서 링크로 안내
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="🔊 통화방 열기", style=discord.ButtonStyle.link, url=ch.jump_url))
+    await interaction.response.send_message(
+        "아무 음성 채널에나 들어가 있으면 바로 옮겨 드려요!\n"
+        "지금은 아래 버튼으로 통화방을 열고 '음성 채널 참가'를 눌러 주세요.",
+        view=view, ephemeral=True)
+
+
 async def handle_panel(interaction: discord.Interaction, action: str, channel_id: int):
     ch = interaction.guild.get_channel(channel_id)
     if ch is None or not store.room(channel_id):
-        await interaction.response.send_message("이미 사라진 통화방이에요.", ephemeral=True)
+        await interaction.response.send_message("이미 사라진 통화방이에요!", ephemeral=True)
         return
     if not is_owner(ch, interaction.user):
-        await interaction.response.send_message(f"방장(<@{store.room(channel_id)['owner']}>)만 누를 수 있어요.",
+        await interaction.response.send_message(f"방장(<@{store.room(channel_id)['owner']}>)만 누를 수 있어요!",
                                                 ephemeral=True)
         return
     if action == "lock":
         await interaction.response.defer(ephemeral=True)
         await lock_room(ch, interaction.user)
-        await interaction.followup.send("🔒 잠갔어요.", ephemeral=True)
+        await interaction.followup.send("🔒 잠갔어요!", ephemeral=True)
     elif action == "unlock":
         await interaction.response.defer(ephemeral=True)
         await unlock_room(ch)
-        await interaction.followup.send("🔓 공개로 바꿨어요.", ephemeral=True)
+        await interaction.followup.send("🔓 공개로 바꿨어요!", ephemeral=True)
     elif action == "rename":
         await interaction.response.send_modal(RenameModal(ch))
     elif action == "limit":
@@ -286,7 +318,7 @@ async def owned_room(interaction: discord.Interaction):
     """명령어 친 사람이 방장인 방. 없으면 안내하고 None."""
     ch = existing_room(interaction.guild, interaction.user)
     if ch is None:
-        await interaction.response.send_message("방장인 통화방이 없어요. `/통화방 생성`으로 먼저 만들어 주세요.", ephemeral=True)
+        await interaction.response.send_message("내 통화방이 없어요! `/통화방 생성`으로 먼저 만들어 주세요.", ephemeral=True)
     return ch
 
 
@@ -303,14 +335,14 @@ async def cmd_create(interaction: discord.Interaction, 이름: str | None = None
     async with user_lock(member.id):
         ch = existing_room(interaction.guild, member)
         if ch:
-            await interaction.response.send_message(f"이미 방이 있어요: {ch.mention}", ephemeral=True)
+            await interaction.response.send_message(f"이미 내 방이 있어요! {ch.mention}", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         category = pick_category(interaction.guild, member, interaction.channel)
         try:
             ch = await create_room(member, category, name=이름, limit=인원, game=game)
         except discord.HTTPException:
-            await interaction.followup.send("방을 만들지 못했어요. 봇 권한(채널 관리)을 확인해 주세요.", ephemeral=True)
+            await interaction.followup.send("방을 못 만들었어요! 봇 권한(채널 관리)을 확인해 보세요.", ephemeral=True)
             return
 
     if member.voice and member.voice.channel:
@@ -349,7 +381,7 @@ async def cmd_lock(interaction: discord.Interaction):
         return
     await interaction.response.defer(ephemeral=True)
     await lock_room(ch, interaction.user)
-    await interaction.followup.send("🔒 잠갔어요.", ephemeral=True)
+    await interaction.followup.send("🔒 잠갔어요!", ephemeral=True)
 
 
 @room_group.command(name="공개", description="잠금을 풀어서 누구나 들어올 수 있게 해요")
@@ -359,7 +391,7 @@ async def cmd_unlock(interaction: discord.Interaction):
         return
     await interaction.response.defer(ephemeral=True)
     await unlock_room(ch)
-    await interaction.followup.send("🔓 공개로 바꿨어요.", ephemeral=True)
+    await interaction.followup.send("🔓 공개로 바꿨어요!", ephemeral=True)
 
 
 @room_group.command(name="허용", description="잠긴 내 통화방에 특정 사람이 들어올 수 있게 해요")
@@ -379,7 +411,7 @@ async def cmd_transfer(interaction: discord.Interaction, 멤버: discord.Member)
     if problem:
         await interaction.response.send_message(problem, ephemeral=True)
         return
-    await interaction.response.send_message(f"{멤버.mention}님에게 방장을 넘겼어요.", ephemeral=True)
+    await interaction.response.send_message(f"{멤버.mention}님에게 방장을 넘겼어요!", ephemeral=True)
     await transfer_owner(ch, 멤버)
 
 
@@ -389,7 +421,7 @@ async def cmd_panel(interaction: discord.Interaction):
     if not ch:
         return
     await send_panel(ch, interaction.user)
-    await interaction.response.send_message(f"{ch.mention} 채팅에 패널을 올렸어요.", ephemeral=True)
+    await interaction.response.send_message(f"{ch.mention} 채팅에 패널 올렸어요!", ephemeral=True)
 
 
 @room_group.command(name="정보", description="지금 있는 통화방(또는 내 방) 정보를 보여줘요")
@@ -400,7 +432,7 @@ async def cmd_info(interaction: discord.Interaction):
         ch = member.voice.channel
     ch = ch or existing_room(interaction.guild, member)
     if not ch:
-        await interaction.response.send_message("봇이 만든 통화방에 들어가 있거나 내 방이 있어야 볼 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("통화방에 들어가 있어야 볼 수 있어요!", ephemeral=True)
         return
     room = store.room(ch.id)
     embed = discord.Embed(title=ch.name, color=discord.Color.blurple())

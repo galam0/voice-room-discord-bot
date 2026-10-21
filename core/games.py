@@ -21,7 +21,7 @@ async def resolve_game(interaction: discord.Interaction, name: str | None):
     if entry:
         return entry["name"]
     names = ", ".join(sorted(e["name"] for e in store.games(interaction.guild.id).values())) or "아직 없음"
-    msg = (f"**{name}**은(는) 등록된 게임이 아니에요. 목록에서 골라 주세요.\n"
+    msg = (f"**{name}**은(는) 등록 안 된 게임이에요! 목록에서 골라 주세요.\n"
            f"등록된 게임: {names}\n(관리자는 `/통화방설정 게임추가`로 등록할 수 있어요)")
     if interaction.response.is_done():
         await interaction.followup.send(msg, ephemeral=True)

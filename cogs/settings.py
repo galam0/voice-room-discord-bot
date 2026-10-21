@@ -31,7 +31,7 @@ async def cmd_setup_make(interaction: discord.Interaction):
     category = first_hub_category(guild) or await guild.create_category("통화방", reason="통화방 봇 설정")
     hub = await guild.create_voice_channel("➕ 통화방 만들기", category=category, reason="통화방 봇 설정")
     store.set_hub(guild.id, hub.id)
-    await interaction.followup.send(f"{hub.mention} 만들었어요.", ephemeral=True)
+    await interaction.followup.send(f"{hub.mention} 만들었어요!", ephemeral=True)
 
 
 @setup_group.command(name="게임채널", description="게임별 생성 채널을 만들어요 (예: ➕ 발로란트 5인방)")
@@ -49,7 +49,7 @@ async def cmd_setup_game_hub(interaction: discord.Interaction, 게임: str, 인�
     hub = await guild.create_voice_channel(name[:100], category=category, reason="통화방 봇 게임 채널")
     store.set_hub(guild.id, hub.id, game=game, limit=인원)
     limit_text = f"인원 {인원}명 제한" if 인원 else "인원 제한 없음"
-    await interaction.followup.send(f"{hub.mention} 만들었어요. ({limit_text})",
+    await interaction.followup.send(f"{hub.mention} 만들었어요! ({limit_text})",
                                     ephemeral=True)
 
 
@@ -62,16 +62,16 @@ async def cmd_setup_set(interaction: discord.Interaction, 채널: discord.VoiceC
     if game is False:
         return
     store.set_hub(interaction.guild.id, 채널.id, game=game, limit=인원)
-    await interaction.response.send_message(f"{채널.mention}을(를) 생성 채널로 지정했어요.",
+    await interaction.response.send_message(f"{채널.mention}을(를) 생성 채널로 지정했어요!",
                                             ephemeral=True)
 
 
 @setup_group.command(name="해제", description="생성 채널 지정을 해제해요 (채널은 지우지 않아요)")
 async def cmd_setup_clear(interaction: discord.Interaction, 채널: discord.VoiceChannel):
     if store.remove_hub(interaction.guild.id, 채널.id):
-        await interaction.response.send_message(f"{채널.mention} 생성 채널 지정을 해제했어요.", ephemeral=True)
+        await interaction.response.send_message(f"{채널.mention} 생성 채널 해제!", ephemeral=True)
     else:
-        await interaction.response.send_message(f"{채널.mention}은(는) 생성 채널이 아니에요.", ephemeral=True)
+        await interaction.response.send_message(f"{채널.mention}은(는) 생성 채널이 아니에요!", ephemeral=True)
 
 
 @setup_group.command(name="목록", description="생성 채널·등록된 게임·구인 채널을 보여줘요")
@@ -110,7 +110,7 @@ async def cmd_setup_list(interaction: discord.Interaction):
 async def cmd_setup_log(interaction: discord.Interaction, 채널: discord.TextChannel | None = None):
     store.guild(interaction.guild.id)["log"] = 채널.id if 채널 else None
     store.save()
-    msg = f"이제 {채널.mention}에 기록을 남겨요." if 채널 else "로그를 껐어요."
+    msg = f"이제 {채널.mention}에 기록을 남겨요!" if 채널 else "로그 껐어요!"
     await interaction.response.send_message(msg, ephemeral=True)
 
 
@@ -123,25 +123,25 @@ async def cmd_setup_category(interaction: discord.Interaction, 카테고리: dis
     cat_id = 카테고리.id if 카테고리 else None
     if 생성채널:
         if not store.set_hub_category(gid, 생성채널.id, cat_id):
-            await interaction.response.send_message(f"{생성채널.mention}은(는) 생성 채널이 아니에요.", ephemeral=True)
+            await interaction.response.send_message(f"{생성채널.mention}은(는) 생성 채널이 아니에요!", ephemeral=True)
             return
-        msg = (f"{생성채널.mention}으로 만든 방은 이제 📁 **{카테고리.name}** 카테고리에 생겨요." if 카테고리
-               else f"{생성채널.mention} 전용 카테고리를 해제했어요. 서버 기본 카테고리를 따라가요.")
+        msg = (f"{생성채널.mention}으로 만든 방은 이제 📁 **{카테고리.name}** 카테고리에 생겨요!" if 카테고리
+               else f"{생성채널.mention} 전용 카테고리 해제! 이제 서버 기본 카테고리를 따라가요.")
     else:
         store.set_room_category(gid, cat_id)
-        msg = (f"통화방은 이제 기본으로 📁 **{카테고리.name}** 카테고리에 생겨요." if 카테고리
-               else "기본 카테고리를 해제했어요. 생성 채널이 있는 카테고리에 방이 생겨요.")
+        msg = (f"통화방은 이제 기본으로 📁 **{카테고리.name}** 카테고리에 생겨요!" if 카테고리
+               else "기본 카테고리 해제! 이제 생성 채널이 있는 카테고리에 방이 생겨요.")
     if 카테고리:
         perms = 카테고리.permissions_for(interaction.guild.me)
         if not (perms.manage_channels and perms.move_members):
-            msg += "\n⚠️ 봇이 이 카테고리에서 '채널 관리'나 '멤버 이동' 권한이 없어요. 카테고리 권한을 확인해 주세요."
+            msg += "\n⚠️ 봇한테 이 카테고리의 '채널 관리'나 '멤버 이동' 권한이 없어요! 카테고리 권한을 확인해 보세요."
     await interaction.response.send_message(msg, ephemeral=True)
 
 
 @setup_group.command(name="구인채널", description="구인 글이 올라갈 채팅 채널을 정해요 (안 정하면 명령어 친 채널)")
 async def cmd_setup_recruit(interaction: discord.Interaction, 채널: discord.TextChannel | None = None):
     store.set_recruit_channel(interaction.guild.id, 채널.id if 채널 else None)
-    msg = f"구인 글은 이제 {채널.mention}에 올라가요." if 채널 else "구인 채널 지정을 해제했어요. 명령어 친 채널에 올라가요."
+    msg = f"구인 글은 이제 {채널.mention}에 올라가요!" if 채널 else "구인 채널 해제! 이제 명령어 친 채널에 올라가요."
     await interaction.response.send_message(msg, ephemeral=True)
 
 
@@ -154,11 +154,11 @@ async def cmd_setup_game_role(interaction: discord.Interaction, 게임: str, 역
         return
     store.set_game_role(interaction.guild.id, game, 역할.id if 역할 else None)
     if not 역할:
-        await interaction.response.send_message(f"**{game}** 역할 연결을 해제했어요.", ephemeral=True)
+        await interaction.response.send_message(f"**{game}** 역할 연결 해제!", ephemeral=True)
         return
-    msg = f"이제 **{game}** 구인 글이 올라오면 {역할.mention}이(가) 자동으로 멘션돼요."
+    msg = f"이제 **{game}** 구인 글에 {역할.mention}이(가) 자동으로 멘션돼요!"
     if not mention_ok(interaction.guild, [역할]):
-        msg += ("\n⚠️ 지금은 봇이 이 역할을 멘션할 수 없어요. 서버 설정 → 역할 → 이 역할에서 "
+        msg += ("\n⚠️ 지금은 봇이 이 역할을 멘션할 수 없어요! 서버 설정 → 역할 → 이 역할에서 "
                 "'모든 사람이 이 역할을 @멘션하도록 허용'을 켜 주세요.")
     await interaction.response.send_message(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
@@ -173,10 +173,10 @@ async def cmd_setup_game_add(interaction: discord.Interaction, 게임: app_comma
     name = old["name"] if old else 게임.strip()
     if 아이콘 is None:
         store.set_game(gid, name, old.get("file") if old else None)
-        await interaction.response.send_message(f"**{name}** 게임을 등록했어요.", ephemeral=True)
+        await interaction.response.send_message(f"**{name}** 게임 등록했어요!", ephemeral=True)
         return
     if not (아이콘.content_type or "").startswith("image/") or 아이콘.size > 5 * 1024 * 1024:
-        await interaction.response.send_message("아이콘은 5MB 이하 이미지 파일(PNG/JPG)만 올릴 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("아이콘은 5MB 이하 PNG/JPG만 돼요!", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     data = await 아이콘.read()
@@ -195,10 +195,10 @@ async def cmd_setup_game_add(interaction: discord.Interaction, 게임: app_comma
     try:
         path = await asyncio.to_thread(save)
     except Exception:
-        await interaction.followup.send("이미지를 읽지 못했어요. 다른 파일로 해 주세요.", ephemeral=True)
+        await interaction.followup.send("이미지를 못 읽었어요! 다른 파일로 해 주세요.", ephemeral=True)
         return
     store.set_game(gid, name, path)
-    await interaction.followup.send(f"**{name}** 게임을 아이콘과 함께 등록했어요.", ephemeral=True)
+    await interaction.followup.send(f"**{name}** 게임을 아이콘이랑 같이 등록했어요!", ephemeral=True)
 
 
 async def source_guild_autocomplete(interaction: discord.Interaction, current: str):
@@ -220,14 +220,14 @@ async def source_guild_autocomplete(interaction: discord.Interaction, current: s
 async def cmd_setup_game_import(interaction: discord.Interaction, 서버: str, 덮어쓰기: bool = False):
     source = bot.get_guild(int(서버)) if 서버.isdigit() else None
     if source is None or source.id == interaction.guild.id:
-        await interaction.response.send_message("서버를 목록에서 골라 주세요.", ephemeral=True)
+        await interaction.response.send_message("목록에서 서버를 골라 주세요!", ephemeral=True)
         return
     try:
         member = source.get_member(interaction.user.id) or await source.fetch_member(interaction.user.id)
     except discord.HTTPException:
         member = None
     if member is None or not member.guild_permissions.manage_guild:
-        await interaction.response.send_message(f"**{source.name}**에서 서버 관리 권한이 있어야 가져올 수 있어요.",
+        await interaction.response.send_message(f"**{source.name}**에서도 서버 관리 권한이 있어야 가져올 수 있어요!",
                                                 ephemeral=True)
         return
     gid = interaction.guild.id
@@ -252,7 +252,7 @@ async def cmd_setup_game_import(interaction: discord.Interaction, 서버: str, �
         lines.append(f"덮어씀 {len(updated)}개: {', '.join(updated)}")
     if skipped:
         lines.append(f"이미 있어서 건너뜀 {len(skipped)}개: {', '.join(skipped)}")
-    await interaction.response.send_message("\n".join(lines) or "가져올 게임이 없어요.", ephemeral=True)
+    await interaction.response.send_message("\n".join(lines) or "가져올 게임이 없어요!", ephemeral=True)
 
 
 @setup_group.command(name="게임삭제", description="등록한 게임을 지워요")
@@ -260,12 +260,12 @@ async def cmd_setup_game_import(interaction: discord.Interaction, 서버: str, �
 async def cmd_setup_game_remove(interaction: discord.Interaction, 게임: str):
     entry = store.game(interaction.guild.id, 게임)
     if not entry:
-        await interaction.response.send_message("등록된 게임이 아니에요.", ephemeral=True)
+        await interaction.response.send_message("등록된 게임이 아니에요!", ephemeral=True)
         return
     if entry.get("file") and os.path.exists(entry["file"]):
         os.remove(entry["file"])
     store.remove_game(interaction.guild.id, 게임)
     await interaction.response.send_message(
-        f"**{entry['name']}** 게임을 지웠어요. 이 게임으로 만든 생성 채널이 있으면 `/통화방설정 해제`로 정리해 주세요.",
+        f"**{entry['name']}** 게임 지웠어요! 이 게임 생성 채널이 있으면 `/통화방설정 해제`로 정리해 주세요.",
         ephemeral=True)
 bot.tree.add_command(setup_group)

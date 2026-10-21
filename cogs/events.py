@@ -8,7 +8,7 @@ from core.store import store
 from core.client import bot
 from core.utils import admin_log, existing_room, humans, user_lock
 from cogs.recruit import close_post, expire_posts, handle_recruit_apply, handle_recruit_close, refresh_post
-from cogs.rooms import create_room, delete_room, handle_panel, hub_room_category, transfer_owner
+from cogs.rooms import create_room, delete_room, handle_panel, handle_voice_join, hub_room_category, transfer_owner
 from cogs.reservation import handle_res_cancel, handle_res_join, res_by_room, reservation_tick, update_res_post
 from cogs.giveaway import giveaway_tick
 from cogs.help import COMMAND_IDS
@@ -108,13 +108,15 @@ async def on_interaction(interaction: discord.Interaction):
             await handle_recruit_apply(interaction, int(custom_id.split(":")[1]))
         elif custom_id.startswith("recruit_close:"):
             await handle_recruit_close(interaction, int(custom_id.split(":")[1]))
+        elif custom_id.startswith("vc_join:"):
+            await handle_voice_join(interaction, int(custom_id.split(":")[1]))
         elif custom_id.startswith("panel:"):
             _, action, cid = custom_id.split(":")
             await handle_panel(interaction, action, int(cid))
     except discord.HTTPException as e:
         log.warning("버튼 처리 실패 %s: %s", custom_id, e)
         if not interaction.response.is_done():
-            await interaction.response.send_message("처리하지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
+            await interaction.response.send_message("실패했어요! 봇 권한을 확인해 보세요.", ephemeral=True)
 
 
 @bot.event
@@ -152,9 +154,9 @@ async def on_app_command_completion(interaction: discord.Interaction, command):
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     log.exception("명령어 오류", exc_info=error)
-    msg = "문제가 생겼어요. 봇 권한(채널 관리·역할 관리·멤버 이동)을 확인해 주세요."
+    msg = "오류가 났어요! 봇 권한(채널 관리·역할 관리·멤버 이동)을 확인해 보세요."
     if isinstance(error, app_commands.MissingPermissions):
-        msg = "이 명령어는 서버 관리 권한이 필요해요."
+        msg = "관리자만 쓸 수 있는 명령어예요!"
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)

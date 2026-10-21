@@ -95,7 +95,7 @@ def res_view(message_id: int, res: dict, finished: bool = False) -> discord.ui.V
     view = discord.ui.View(timeout=None)
     room = bot.get_channel(res["room"]) if res.get("room") else None
     if room:
-        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=room.jump_url))
+        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.secondary, custom_id=f"vc_join:{room.id}"))
     if not finished:
         view.add_item(discord.ui.Button(label="참가", style=discord.ButtonStyle.primary, custom_id=f"res_join:{message_id}"))
         view.add_item(discord.ui.Button(label="취소", style=discord.ButtonStyle.danger, custom_id=f"res_cancel:{message_id}"))
@@ -112,11 +112,11 @@ async def update_res_post(message_id: int, res: dict, status: str | None = None,
 async def handle_res_join(interaction: discord.Interaction, message_id: int):
     res = store.res(message_id)
     if not res:
-        await interaction.response.send_message("이미 끝났거나 취소된 예약이에요.", ephemeral=True)
+        await interaction.response.send_message("이미 끝났거나 취소된 예약이에요!", ephemeral=True)
         return
     user = interaction.user
     if user.id == res["author"]:
-        await interaction.response.send_message("주최자는 이미 참가돼 있어요.",
+        await interaction.response.send_message("주최자는 이미 참가 중이에요!",
                                                 ephemeral=True)
         return
     await interaction.response.defer()
@@ -127,22 +127,22 @@ async def handle_res_join(interaction: discord.Interaction, message_id: int):
         if waiting:  # 빈자리는 대기 1번에게
             promoted = waiting.pop(0)
             res["participants"].append(promoted)
-        note = "참가를 취소했어요."
+        note = "참가 취소!"
     elif any(p["id"] == user.id for p in waiting):
         res["waitlist"] = [p for p in waiting if p["id"] != user.id]
-        note = "대기를 취소했어요."
+        note = "대기 취소!"
     elif len(res["participants"]) >= res["target"]:
         waiting.append({"id": user.id, "name": user.display_name})
-        note = f"자리가 다 차서 대기 {len(waiting)}번이에요."
+        note = f"자리가 꽉 차서 대기 {len(waiting)}번이에요!"
     else:
         res["participants"].append({"id": user.id, "name": user.display_name})
-        note = "참가했어요."
+        note = "참가 완료!"
     store.set_res(message_id, res)
     await update_res_post(message_id, res, msg=interaction.message)
     await interaction.followup.send(note, ephemeral=True)
     if promoted:
         try:
-            await interaction.channel.send(f"<@{promoted['id']}> 대기에서 참가로 넘어왔어요.",
+            await interaction.channel.send(f"<@{promoted['id']}> 자리가 나서 참가로 바뀌었어요!",
                                            allowed_mentions=discord.AllowedMentions(users=True))
         except discord.HTTPException:
             pass
@@ -151,17 +151,17 @@ async def handle_res_join(interaction: discord.Interaction, message_id: int):
 async def handle_res_cancel(interaction: discord.Interaction, message_id: int):
     res = store.res(message_id)
     if not res:
-        await interaction.response.send_message("이미 끝났거나 취소된 예약이에요.", ephemeral=True)
+        await interaction.response.send_message("이미 끝났거나 취소된 예약이에요!", ephemeral=True)
         return
     if interaction.user.id != res["author"] and not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("예약한 사람만 취소할 수 있어요.",
+        await interaction.response.send_message("주최자만 취소할 수 있어요!",
                                                 ephemeral=True)
         return
     await interaction.response.defer()
     store.remove_res(message_id)
     await update_res_post(message_id, res, status="cancelled", msg=interaction.message)
     await admin_log(interaction.guild, f"📅 예약 취소 · {interaction.user.mention} · {interaction.message.jump_url}")
-    await interaction.followup.send("예약을 취소했어요.", ephemeral=True)
+    await interaction.followup.send("예약 취소!", ephemeral=True)
 
 
 async def remind_res(message_id: int, res: dict):
@@ -186,9 +186,9 @@ async def remind_res(message_id: int, res: dict):
     store.set_res(message_id, res)
     mentions = " ".join(f"<@{p['id']}>" for p in res["participants"])
     where = room.mention if room else ""
-    view = discord.ui.View()
+    view = discord.ui.View(timeout=None)
     if room:
-        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=room.jump_url))
+        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.secondary, custom_id=f"vc_join:{room.id}"))
     try:
         await channel.send(f"⏰ {res.get('game') or '예약'} 10분 후 시작 {where}\n{mentions}",
                            view=view if room else discord.utils.MISSING,
@@ -244,15 +244,15 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
     start = parse_time(시간, now)
     if start is None:
         await interaction.response.send_message(
-            "시간을 읽지 못했어요. `21:00`, `오후 9시`, `내일 20:30`, `10/25 21:00`처럼 적어 주세요.", ephemeral=True)
+            "시간을 못 알아들었어요! `21:00`, `오후 9시`, `내일 20:30`, `10/25 21:00`처럼 적어 주세요.", ephemeral=True)
         return
     if start - now > timedelta(days=7):
-        await interaction.response.send_message("예약은 7일 안쪽으로만 할 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("예약은 최대 7일 뒤까지만 돼요!", ephemeral=True)
         return
     target_id = store.recruit_channel(interaction.guild.id)
     target = interaction.guild.get_channel(target_id) if target_id else interaction.channel
     if target is None or not hasattr(target, "send"):
-        await interaction.response.send_message("글을 올릴 채널을 찾지 못했어요. 관리자에게 `/통화방설정 구인채널`을 부탁해 주세요.",
+        await interaction.response.send_message("글을 올릴 채널이 없어요! 관리자에게 `/통화방설정 구인채널`을 해 달라고 하세요.",
                                                 ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
@@ -276,14 +276,14 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )
     except discord.HTTPException:
-        await interaction.followup.send(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
+        await interaction.followup.send(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.", ephemeral=True)
         return
     res["webhook"] = webhook_id
     # 버튼에 메시지 ID가 들어가야 해서 올린 뒤에 붙임
     await edit_post(target.id, msg.id, webhook_id, view=res_view(msg.id, res))
     store.set_res(msg.id, res)
     await admin_log(interaction.guild, f"📅 예약 · {member.mention} · {time_text(res['start_at'])} · {msg.jump_url}")
-    done = f"예약했어요: {msg.jump_url} ({time_text(res['start_at'])})"
+    done = f"예약 완료! {time_text(res['start_at'])} {msg.jump_url}"
     if roles and not mention_ok(interaction.guild, roles, target):
-        done += "\n⚠️ 역할 멘션이 알림으로 가지 않았을 수 있어요. 관리자에게 그 역할의 '@멘션 허용' 설정을 부탁해 주세요."
+        done += "\n⚠️ 역할 멘션 알림이 안 갔을 수도 있어요. 관리자에게 그 역할의 '@멘션 허용'을 켜 달라고 하세요."
     await interaction.followup.send(done, ephemeral=True)

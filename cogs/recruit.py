@@ -70,7 +70,7 @@ async def recruit_card_file(info: dict, voice, closed: bool = False) -> discord.
 def recruit_view(info: dict, jump_url: str | None) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if jump_url:
-        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.link, url=jump_url))
+        view.add_item(discord.ui.Button(label="🔊 통화방 들어가기", style=discord.ButtonStyle.secondary, custom_id=f"vc_join:{info['voice']}"))
     view.add_item(discord.ui.Button(label="참가", style=discord.ButtonStyle.primary,
                                     custom_id=f"recruit_apply:{info['voice']}"))
     view.add_item(discord.ui.Button(label="마감", style=discord.ButtonStyle.danger,
@@ -92,7 +92,7 @@ async def refresh_post(voice_id: int):
         info["applicants"] = [a for a in info["applicants"] if a["id"] not in ids]
         store.set_post(voice_id, **info)
     ok = await edit_post(info["channel"], info["message"], info.get("webhook"),
-                         attachments=[await recruit_card_file(info, voice)])
+                         attachments=[await recruit_card_file(info, voice)], view=recruit_view(info, voice.jump_url))
     if not ok:
         store.remove_post(voice_id)
 
@@ -110,13 +110,13 @@ async def close_post(voice_id: int):
 async def handle_recruit_close(interaction: discord.Interaction, voice_id: int):
     info = store.post(voice_id)
     if not info:
-        await interaction.response.send_message("이미 마감된 구인 글이에요.", ephemeral=True)
+        await interaction.response.send_message("이미 마감된 구인이에요!", ephemeral=True)
         return
     is_admin = interaction.user.guild_permissions.manage_messages
     if interaction.user.id != info["author"] and not is_admin:
-        await interaction.response.send_message("구인 글을 올린 사람만 마감할 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("구인자만 마감할 수 있어요!", ephemeral=True)
         return
-    await interaction.response.send_message("구인을 마감했어요.", ephemeral=True)
+    await interaction.response.send_message("구인 마감!", ephemeral=True)
     await close_post(voice_id)
 
 
@@ -124,29 +124,29 @@ async def handle_recruit_apply(interaction: discord.Interaction, voice_id: int):
     """참가 버튼: 누르면 신청, 다시 누르면 취소."""
     info = store.post(voice_id)
     if not info:
-        await interaction.response.send_message("이미 마감된 구인 글이에요.", ephemeral=True)
+        await interaction.response.send_message("이미 마감된 구인이에요!", ephemeral=True)
         return
     user = interaction.user
     voice = bot.get_channel(voice_id)
     if user.id == info["author"]:
-        await interaction.response.send_message("구인자는 신청하지 않아도 돼요.", ephemeral=True)
+        await interaction.response.send_message("구인자는 참가할 수 없어요!", ephemeral=True)
         return
     if voice and user in voice.members:
-        await interaction.response.send_message("이미 통화방에 들어가 있어요.", ephemeral=True)
+        await interaction.response.send_message("이미 통화방에 있어요!", ephemeral=True)
         return
     applicants = info.setdefault("applicants", [])
     if any(a["id"] == user.id for a in applicants):
         info["applicants"] = [a for a in applicants if a["id"] != user.id]
         store.set_post(voice_id, **info)
-        await interaction.response.send_message("참가 신청을 취소했어요.", ephemeral=True)
+        await interaction.response.send_message("참가 취소!", ephemeral=True)
     else:
         applicants.append({"id": user.id, "name": user.display_name})
         store.set_post(voice_id, **info)
         await interaction.response.send_message(
-            "참가 신청했어요.", ephemeral=True)
+            "참가 완료!", ephemeral=True)
         if voice:
             try:
-                await voice.send(f"{user.mention}님이 참가 신청했어요. <@{info['author']}>",
+                await voice.send(f"{user.mention}님이 참가했어요! <@{info['author']}>",
                                  allowed_mentions=discord.AllowedMentions(users=True))
             except discord.HTTPException:
                 pass
@@ -178,7 +178,7 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     member = interaction.user
     voice = member.voice.channel if member.voice and member.voice.channel else existing_room(interaction.guild, member)
     if voice is None:
-        await interaction.response.send_message("음성 채널에 들어가 있거나 내 통화방이 있어야 구인할 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("통화방에 들어가 있어야 구인할 수 있어요!", ephemeral=True)
         return
     game = await resolve_game(interaction, 게임)
     if game is False:
@@ -189,13 +189,13 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     target_id = store.recruit_channel(interaction.guild.id)
     target = interaction.guild.get_channel(target_id) if target_id else interaction.channel
     if target is None or not hasattr(target, "send"):
-        await interaction.response.send_message("구인 글을 올릴 채널을 찾지 못했어요. 관리자에게 `/통화방설정 구인채널`을 부탁해 주세요.", ephemeral=True)
+        await interaction.response.send_message("구인 글을 올릴 채널이 없어요! 관리자에게 `/통화방설정 구인채널`을 해 달라고 하세요.", ephemeral=True)
         return
 
     current = len(humans(voice))
     if 인원 <= current:
         await interaction.response.send_message(
-            f"지금 {voice.mention}에 이미 {current}명이 있어요. 인원은 {current + 1}명 이상으로 정해 주세요.", ephemeral=True)
+            f"{voice.mention}에 벌써 {current}명이 있어요! 인원은 {current + 1}명 이상으로 정해 주세요.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -221,14 +221,14 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )
     except discord.HTTPException:
-        await interaction.followup.send(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
+        await interaction.followup.send(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.", ephemeral=True)
         return
     info.update(channel=target.id, message=msg.id, webhook=webhook_id)
     store.set_post(voice.id, **info)
     await admin_log(interaction.guild, f"📢 구인 · {member.mention} · {voice.mention} · {msg.jump_url}")
-    done = f"구인 글을 올렸어요: {msg.jump_url}"
+    done = f"구인 글 올렸어요! {msg.jump_url}"
     if roles and not mention_ok(interaction.guild, roles, target):
-        done += "\n⚠️ 역할 멘션이 알림으로 가지 않았을 수 있어요. 관리자에게 그 역할의 '@멘션 허용' 설정을 부탁해 주세요."
+        done += "\n⚠️ 역할 멘션 알림이 안 갔을 수도 있어요. 관리자에게 그 역할의 '@멘션 허용'을 켜 달라고 하세요."
     await interaction.followup.send(done, ephemeral=True)
 
 
@@ -237,9 +237,9 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
 async def cmd_recruit_close(interaction: discord.Interaction):
     mine = [int(v) for v, p in store.data["posts"].items() if p["author"] == interaction.user.id]
     if not mine:
-        await interaction.response.send_message("열려 있는 내 구인 글이 없어요.", ephemeral=True)
+        await interaction.response.send_message("마감할 구인 글이 없어요!", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     for vid in mine:
         await close_post(vid)
-    await interaction.followup.send("구인을 마감했어요.", ephemeral=True)
+    await interaction.followup.send("구인 마감!", ephemeral=True)

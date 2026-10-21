@@ -109,12 +109,12 @@ async def menu_emoji_autocomplete(interaction: discord.Interaction, current: str
 
 def role_problem(guild: discord.Guild, role: discord.Role):
     if role.is_default():
-        return "@everyone은 넣을 수 없어요."
+        return "@everyone은 안 돼요!"
     if role.managed:
-        return "봇·연동 전용 역할은 넣을 수 없어요."
+        return "봇·연동 전용 역할은 안 돼요!"
     if role >= guild.me.top_role:
-        return (f"{role.mention}이(가) 봇 역할보다 위에 있어서 줄 수 없어요. "
-                "서버 설정 → 역할에서 봇 역할을 그 역할보다 위로 올려 주세요.")
+        return (f"{role.mention}이(가) 봇 역할보다 위에 있어서 못 줘요! "
+                "서버 설정 → 역할에서 봇 역할을 더 위로 올려 주세요.")
     return None
 
 
@@ -134,11 +134,11 @@ async def cmd_menu_create(interaction: discord.Interaction, 제목: app_commands
     try:
         msg = await target.send(embed=menu_embed(menu))
     except discord.HTTPException:
-        await interaction.response.send_message(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
+        await interaction.response.send_message(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.", ephemeral=True)
         return
     store.set_menu(msg.id, menu)
     await interaction.response.send_message(
-        f"역할 메뉴를 올렸어요: {msg.jump_url}", ephemeral=True)
+        f"역할 메뉴 올렸어요! {msg.jump_url}", ephemeral=True)
 
 
 @menu_group.command(name="추가", description="역할 메뉴에 이모지와 역할을 넣어요 (같은 이모지면 역할을 바꿔요)")
@@ -147,7 +147,7 @@ async def cmd_menu_create(interaction: discord.Interaction, 제목: app_commands
 async def cmd_menu_add(interaction: discord.Interaction, 메뉴: str, 이모지: str, 역할: discord.Role):
     menu = store.menu(int(메뉴)) if 메뉴.isdigit() else None
     if not menu:
-        await interaction.response.send_message("역할 메뉴를 목록에서 골라 주세요.", ephemeral=True)
+        await interaction.response.send_message("목록에서 역할 메뉴를 골라 주세요!", ephemeral=True)
         return
     problem = role_problem(interaction.guild, 역할)
     if problem:
@@ -157,16 +157,16 @@ async def cmd_menu_add(interaction: discord.Interaction, 메뉴: str, 이모지:
     msg = await fetch_menu_message(interaction.guild, int(메뉴))
     if msg is None:
         store.remove_menu(int(메뉴))
-        await interaction.followup.send("역할 메뉴 글을 찾지 못했어요. 지워졌다면 `/역할메뉴 만들기`로 다시 만들어 주세요.", ephemeral=True)
+        await interaction.followup.send("역할 메뉴 글이 없어요! 지웠다면 `/역할메뉴 만들기`로 다시 만들어 주세요.", ephemeral=True)
         return
     emoji = discord.PartialEmoji.from_str(이모지.strip())
     if len(menu["items"]) >= 20 and emoji_key(emoji) not in menu["items"]:
-        await interaction.followup.send("디스코드 제한으로 한 메뉴에 이모지는 20개까지예요.", ephemeral=True)
+        await interaction.followup.send("한 메뉴에 이모지는 20개까지만 돼요! (디스코드 제한)", ephemeral=True)
         return
     try:
         await msg.add_reaction(emoji)
     except discord.HTTPException:
-        await interaction.followup.send("그 이모지를 쓸 수 없어요. 기본 이모지나 이 서버에 있는 이모지를 한 개만 넣어 주세요.",
+        await interaction.followup.send("그 이모지는 못 써요! 기본 이모지나 이 서버 이모지 하나만 넣어 주세요.",
                                         ephemeral=True)
         return
     menu["items"][emoji_key(emoji)] = {"emoji": str(emoji), "role": 역할.id}
@@ -181,11 +181,11 @@ async def cmd_menu_add(interaction: discord.Interaction, 메뉴: str, 이모지:
 async def cmd_menu_remove(interaction: discord.Interaction, 메뉴: str, 이모지: str):
     menu = store.menu(int(메뉴)) if 메뉴.isdigit() else None
     if not menu:
-        await interaction.response.send_message("역할 메뉴를 목록에서 골라 주세요.", ephemeral=True)
+        await interaction.response.send_message("목록에서 역할 메뉴를 골라 주세요!", ephemeral=True)
         return
     emoji = discord.PartialEmoji.from_str(이모지.strip())
     if menu["items"].pop(emoji_key(emoji), None) is None:
-        await interaction.response.send_message("그 메뉴에 없는 이모지예요.", ephemeral=True)
+        await interaction.response.send_message("그 메뉴에 없는 이모지예요!", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     store.set_menu(int(메뉴), menu)
@@ -196,7 +196,7 @@ async def cmd_menu_remove(interaction: discord.Interaction, 메뉴: str, 이모�
             await msg.clear_reaction(emoji)
         except discord.HTTPException:
             pass
-    await interaction.followup.send(f"{emoji} 을(를) 뺐어요.", ephemeral=True)
+    await interaction.followup.send(f"{emoji} 뺐어요!", ephemeral=True)
 
 
 # ─────────────────────────────── /자동역할 ───────────────────────────────
@@ -204,7 +204,7 @@ auto_role_group = app_commands.Group(
     name="자동역할", description="서버에 들어온 사람에게 자동으로 주는 역할 (관리자)", guild_only=True,
     default_permissions=discord.Permissions(manage_roles=True),
 )
-MEMBERS_INTENT_HELP = ("자동 역할을 쓰려면 먼저 설정이 필요해요.\n"
+MEMBERS_INTENT_HELP = ("자동 역할은 설정부터 해야 돼요!\n"
                        "1. 디스코드 개발자 포털 → 봇 → Bot → **Server Members Intent** 켜기\n"
                        "2. VM의 `.env`에 `MEMBERS_INTENT=1` 한 줄 추가 후 봇 재시작")
 
@@ -234,12 +234,12 @@ async def cmd_auto_role_add(interaction: discord.Interaction, 역할: discord.Ro
         return
     roles = auto_roles(interaction.guild.id)
     if 역할.id in roles:
-        await interaction.response.send_message(f"{역할.mention}은(는) 이미 자동 역할이에요.", ephemeral=True,
+        await interaction.response.send_message(f"{역할.mention}은(는) 이미 자동 역할이에요!", ephemeral=True,
                                                 allowed_mentions=discord.AllowedMentions.none())
         return
     roles.append(역할.id)
     store.save()
-    await interaction.response.send_message(f"{역할.mention} 추가했어요.", ephemeral=True,
+    await interaction.response.send_message(f"{역할.mention} 추가!", ephemeral=True,
                                             allowed_mentions=discord.AllowedMentions.none())
 
 
@@ -259,11 +259,11 @@ async def cmd_auto_role_remove(interaction: discord.Interaction, 역할: str):
     roles = auto_roles(interaction.guild.id)
     rid = int(역할) if 역할.isdigit() else None
     if rid not in roles:
-        await interaction.response.send_message("목록에서 골라 주세요.", ephemeral=True)
+        await interaction.response.send_message("목록에서 골라 주세요!", ephemeral=True)
         return
     roles.remove(rid)
     store.save()
-    await interaction.response.send_message(f"<@&{rid}> 뺐어요.", ephemeral=True,
+    await interaction.response.send_message(f"<@&{rid}> 뺐어요!", ephemeral=True,
                                             allowed_mentions=discord.AllowedMentions.none())
 bot.tree.add_command(menu_group)
 bot.tree.add_command(auto_role_group)

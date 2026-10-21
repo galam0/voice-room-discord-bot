@@ -29,11 +29,11 @@ async def cmd_pick(interaction: discord.Interaction, 항목: app_commands.Range[
     else:
         voice = interaction.user.voice.channel if interaction.user.voice else None
         if voice is None:
-            await interaction.response.send_message("항목을 적거나 통화방에 들어가 있어야 해요.", ephemeral=True)
+            await interaction.response.send_message("항목을 적거나 통화방에 들어가 있어야 돼요!", ephemeral=True)
             return
         items = [m.mention for m in humans(voice)]
     if len(items) < 2:
-        await interaction.response.send_message("두 개 이상 있어야 뽑을 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("두 개 이상 적어야 뽑을 수 있어요!", ephemeral=True)
         return
     picked = random.sample(items, min(개수, len(items)))
     await interaction.response.send_message(f"🎲 {'  ·  '.join(picked)}  ({len(items)}개 중)",
@@ -109,7 +109,7 @@ async def finish_giveaway(message_id: int, reroll: bool = False):
             await msg.reply(f"{GIVEAWAY_EMOJI} {' '.join(w.mention for w in winners)} {label} · {g['prize']}",
                             allowed_mentions=discord.AllowedMentions(users=True))
         else:
-            await msg.reply("참여한 사람이 없어서 당첨자가 없어요.")
+            await msg.reply("참여한 사람이 없어서 당첨자 없음")
     except discord.HTTPException as e:
         log.warning("추첨 결과 전송 실패: %s", e)
     return winners
@@ -159,11 +159,11 @@ async def cmd_giveaway_start(interaction: discord.Interaction, 상품: app_comma
                              채널: discord.TextChannel | None = None):
     end_at = parse_end(시간)
     if end_at is None or end_at - time.time() < 10:
-        await interaction.response.send_message("시간을 읽지 못했어요. `10분`, `1시간 30분`, `21:00`처럼 적어 주세요.",
+        await interaction.response.send_message("시간을 못 알아들었어요! `10분`, `1시간 30분`, `21:00`처럼 적어 주세요.",
                                                 ephemeral=True)
         return
     if end_at - time.time() > 30 * 86400:
-        await interaction.response.send_message("추첨은 30일 안쪽으로만 할 수 있어요.", ephemeral=True)
+        await interaction.response.send_message("추첨은 최대 30일까지만 돼요!", ephemeral=True)
         return
     target = 채널 or interaction.channel
     g = {"guild": interaction.guild.id, "channel": target.id, "prize": 상품, "count": 당첨,
@@ -172,12 +172,12 @@ async def cmd_giveaway_start(interaction: discord.Interaction, 상품: app_comma
         msg = await target.send(embed=giveaway_embed(g))
         await msg.add_reaction(GIVEAWAY_EMOJI)
     except discord.HTTPException:
-        await interaction.response.send_message(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.",
+        await interaction.response.send_message(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.",
                                                 ephemeral=True)
         return
     store.data["giveaways"][str(msg.id)] = g
     store.save()
-    await interaction.response.send_message(f"추첨을 올렸어요: {msg.jump_url}", ephemeral=True)
+    await interaction.response.send_message(f"추첨 올렸어요! {msg.jump_url}", ephemeral=True)
 
 
 @giveaway_group.command(name="끝내기", description="진행 중인 추첨을 지금 바로 끝내고 당첨자를 뽑아요")
@@ -185,11 +185,11 @@ async def cmd_giveaway_start(interaction: discord.Interaction, 상품: app_comma
 async def cmd_giveaway_end(interaction: discord.Interaction, 추첨: str):
     g = store.data["giveaways"].get(추첨)
     if not g or g.get("ended"):
-        await interaction.response.send_message("진행 중인 추첨을 목록에서 골라 주세요.", ephemeral=True)
+        await interaction.response.send_message("목록에서 진행 중인 추첨을 골라 주세요!", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     await finish_giveaway(int(추첨))
-    await interaction.followup.send("끝냈어요.", ephemeral=True)
+    await interaction.followup.send("추첨 끝!", ephemeral=True)
 
 
 @giveaway_group.command(name="다시뽑기", description="끝난 추첨에서 당첨자를 다시 뽑아요 (이전 당첨자 제외)")
@@ -197,9 +197,9 @@ async def cmd_giveaway_end(interaction: discord.Interaction, 추첨: str):
 async def cmd_giveaway_reroll(interaction: discord.Interaction, 추첨: str):
     g = store.data["giveaways"].get(추첨)
     if not g or not g.get("ended"):
-        await interaction.response.send_message("끝난 추첨을 목록에서 골라 주세요.", ephemeral=True)
+        await interaction.response.send_message("목록에서 끝난 추첨을 골라 주세요!", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     winners = await finish_giveaway(int(추첨), reroll=True)
-    await interaction.followup.send("다시 뽑았어요." if winners else "뽑을 사람이 없어요.", ephemeral=True)
+    await interaction.followup.send("다시 뽑았어요!" if winners else "뽑을 사람이 없어요!", ephemeral=True)
 bot.tree.add_command(giveaway_group)

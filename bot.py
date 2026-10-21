@@ -628,14 +628,75 @@ def recruit_view(info: dict, jump_url: str | None) -> discord.ui.View:
     return view
 
 
-async def fetch_post_message(info: dict):
-    ch = bot.get_channel(info["channel"])
-    if ch is None:
+# ─────────────── 쓴 사람 이름·프로필로 올리기 (웹후크) ───────────────
+WEBHOOK_NAME = "통화방 봇"
+_webhooks_by_channel: dict[int, discord.Webhook] = {}
+_webhooks_by_id: dict[int, discord.Webhook] = {}
+
+
+async def channel_webhook(channel):
+    """채널에 봇이 만든 웹후크 (없으면 만들고, 권한이 없으면 None)."""
+    if not isinstance(channel, discord.TextChannel):
         return None
+    if channel.id in _webhooks_by_channel:
+        return _webhooks_by_channel[channel.id]
+    wh = None
     try:
-        return await ch.fetch_message(info["message"])
+        for w in await channel.webhooks():
+            if w.user and w.user.id == bot.user.id and w.token:
+                wh = w
+                break
+        if wh is None:
+            wh = await channel.create_webhook(name=WEBHOOK_NAME, reason="구인·예약 글을 쓴 사람 이름으로 올리기")
     except discord.HTTPException:
         return None
+    _webhooks_by_channel[channel.id] = wh
+    _webhooks_by_id[wh.id] = wh
+    return wh
+
+
+async def webhook_by_id(webhook_id: int):
+    if webhook_id not in _webhooks_by_id:
+        try:
+            _webhooks_by_id[webhook_id] = await bot.fetch_webhook(webhook_id)
+        except discord.HTTPException:
+            return None
+    return _webhooks_by_id[webhook_id]
+
+
+async def post_as(member: discord.Member, channel, **kwargs):
+    """명령어 친 사람 이름·프로필로 글 올리기. 웹후크를 못 쓰면 봇 이름으로. → (메시지, 웹후크ID)"""
+    wh = await channel_webhook(channel)
+    if wh:
+        try:
+            msg = await wh.send(username=member.display_name[:80], avatar_url=member.display_avatar.url,
+                                wait=True, **kwargs)
+            return msg, wh.id
+        except discord.HTTPException as e:
+            log.warning("웹후크로 못 올려서 봇 이름으로 올림: %s", e)
+    return await channel.send(**kwargs), None
+
+
+async def edit_post(channel_id: int, message_id: int, webhook_id: int | None = None, **kwargs) -> bool:
+    """올린 글 고치기 (웹후크 글이면 웹후크로). 글이 지워졌으면 False."""
+    try:
+        if webhook_id:
+            wh = await webhook_by_id(webhook_id)
+            if wh is None:
+                return False
+            await wh.edit_message(message_id, **kwargs)
+        else:
+            ch = bot.get_channel(channel_id)
+            if ch is None:
+                return False
+            msg = await ch.fetch_message(message_id)
+            await msg.edit(**kwargs)
+        return True
+    except discord.NotFound:
+        return False
+    except discord.HTTPException as e:
+        log.warning("글 수정 실패 %s: %s", message_id, e)
+        return True
 
 
 async def refresh_post(voice_id: int):
@@ -651,14 +712,10 @@ async def refresh_post(voice_id: int):
     if any(a["id"] in ids for a in info.get("applicants", [])):
         info["applicants"] = [a for a in info["applicants"] if a["id"] not in ids]
         store.set_post(voice_id, **info)
-    msg = await fetch_post_message(info)
-    if msg is None:
+    ok = await edit_post(info["channel"], info["message"], info.get("webhook"),
+                         attachments=[await recruit_card_file(info, voice)])
+    if not ok:
         store.remove_post(voice_id)
-        return
-    try:
-        await msg.edit(attachments=[await recruit_card_file(info, voice)])
-    except discord.HTTPException:
-        pass
 
 
 async def close_post(voice_id: int):
@@ -666,14 +723,9 @@ async def close_post(voice_id: int):
     if not info:
         return
     store.remove_post(voice_id)
-    msg = await fetch_post_message(info)
-    if msg is None:
-        return
     voice = bot.get_channel(voice_id)
-    try:
-        await msg.edit(attachments=[await recruit_card_file(info, voice, closed=True)], view=None)
-    except discord.HTTPException:
-        pass
+    await edit_post(info["channel"], info["message"], info.get("webhook"),
+                    attachments=[await recruit_card_file(info, voice, closed=True)], view=None)
 
 
 async def handle_recruit_close(interaction: discord.Interaction, voice_id: int):
@@ -1383,10 +1435,11 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     game_role = interaction.guild.get_role(game_role_id) if game_role_id else None
     if game_role and game_role not in roles:
         roles.append(game_role)
-    header = "".join(f"{r.mention} " for r in roles)
+    header = " ".join(r.mention for r in roles) or None
     try:
-        msg = await target.send(
-            content=f"{header}{member.mention} · {voice.mention}",
+        msg, webhook_id = await post_as(
+            member, target,
+            content=header,
             file=await recruit_card_file(info, voice),
             view=recruit_view(info, voice.jump_url),
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
@@ -1394,7 +1447,7 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
     except discord.HTTPException:
         await interaction.followup.send(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
         return
-    info.update(channel=target.id, message=msg.id)
+    info.update(channel=target.id, message=msg.id, webhook=webhook_id)
     store.set_post(voice.id, **info)
     done = f"구인 글을 올렸어요: {msg.jump_url}"
     if roles and not mention_ok(interaction.guild, roles, target):
@@ -1846,26 +1899,11 @@ def res_view(message_id: int, res: dict, finished: bool = False) -> discord.ui.V
     return view if view.children else None
 
 
-async def res_message(res: dict, message_id: int):
-    ch = bot.get_channel(res["channel"])
-    if ch is None:
-        return None
-    try:
-        return await ch.fetch_message(message_id)
-    except discord.HTTPException:
-        return None
-
-
 async def update_res_post(message_id: int, res: dict, status: str | None = None, msg=None):
-    msg = msg or await res_message(res, message_id)
-    if msg is None:
-        return
     status = status or res_status(res)
     finished = status in ("started", "cancelled")
-    try:
-        await msg.edit(attachments=[await res_card_file(res, status)], view=res_view(message_id, res, finished))
-    except discord.HTTPException as e:
-        log.warning("예약 글 갱신 실패 %s: %s", message_id, e)
+    await edit_post(res["channel"], message_id, res.get("webhook"),
+                    attachments=[await res_card_file(res, status)], view=res_view(message_id, res, finished))
 
 
 async def handle_res_join(interaction: discord.Interaction, message_id: int):
@@ -2025,17 +2063,20 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
     game_role = interaction.guild.get_role(game_role_id) if game_role_id else None
     if game_role and game_role not in roles:
         roles.append(game_role)
-    header = "".join(f"{r.mention} " for r in roles)
+    header = " ".join(r.mention for r in roles) or None
     try:
-        msg = await target.send(
-            content=f"{header}{member.mention} · {time_text(res['start_at'])} 예약",
+        msg, webhook_id = await post_as(
+            member, target,
+            content=header,
             file=await res_card_file(res, res_status(res)),
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )
-        await msg.edit(view=res_view(msg.id, res))  # 버튼에 메시지 ID가 들어가야 해서 올린 뒤에 붙임
     except discord.HTTPException:
         await interaction.followup.send(f"{target.mention}에 글을 올리지 못했어요. 봇 권한을 확인해 주세요.", ephemeral=True)
         return
+    res["webhook"] = webhook_id
+    # 버튼에 메시지 ID가 들어가야 해서 올린 뒤에 붙임
+    await edit_post(target.id, msg.id, webhook_id, view=res_view(msg.id, res))
     store.set_res(msg.id, res)
     done = f"예약했어요: {msg.jump_url} ({time_text(res['start_at'])})"
     if roles and not mention_ok(interaction.guild, roles, target):

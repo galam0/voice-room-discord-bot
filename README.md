@@ -72,6 +72,8 @@
 
 `/예약`의 시간은 `21:00`, `오후 9시`, `9시 30분`, `내일 20:30`, `10/25 21:00`처럼 적으면 되고 7일 안쪽까지 가능해요. 예약 글의 **참가** 버튼으로 모으고(다시 누르면 취소, 꽉 차면 대기 명단에 들어가고 자리가 나면 대기 1번이 자동으로 참가), 예약한 사람은 **취소** 버튼으로 예약을 없앨 수 있어요. 시작 10분 전에 참가자를 멘션하고 예약한 사람 이름으로 통화방을 만들어 줘요. 통화방이 열린 뒤에는 참가를 안 눌렀어도 통화방에 들어오면 자동으로 참가자가 되고(자리가 남아 있을 때), 이미지에서 아직 안 들어온 참가자는 흐리게 보여요 (인원 수에는 포함).
 
+구인·예약 글은 봇 이름이 아니라 **명령어를 친 사람의 닉네임과 프로필**로 올라가요 (웹후크 관리 권한 필요, 없으면 봇 이름으로).
+
 구인 글은 **이미지 카드**로 올라가고(게임 아이콘, 티어, 참가자 프로필 사진, 빈 자리, 모집 상태) **🔊 통화방 들어가기** 버튼이 붙어요. 인원이 바뀌면 이미지가 다시 그려지고, 목표를 채우면 "모집 완료", 방이 비거나 사라지면 자동 마감.
 
 자동 기능: 빈 방 삭제 · 방장이 나가면 남은 사람에게 위임(기본 이름이면 새 방장 이름으로 바뀜) · 한 사람당 방 1개.
@@ -81,8 +83,8 @@
 1. https://discord.com/developers/applications → New Application → Bot → **Reset Token**으로 토큰 복사
 2. OAuth2 → URL Generator
    - Scopes: `bot`, `applications.commands`
-   - Bot Permissions: **View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Mention Everyone(역할 멘션용), Connect, Manage Channels, Manage Roles, Move Members**
-   - 또는 초대 링크를 직접: `https://discord.com/oauth2/authorize?client_id=애플리케이션ID&permissions=286510096&scope=bot%20applications.commands`
+   - Bot Permissions: **View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Mention Everyone(역할 멘션용), Manage Webhooks(구인·예약 글을 쓴 사람 이름으로), Connect, Manage Channels, Manage Roles, Move Members**
+   - 또는 초대 링크를 직접: `https://discord.com/oauth2/authorize?client_id=애플리케이션ID&permissions=823381008&scope=bot%20applications.commands`
 3. 만들어진 링크로 서버에 초대
 4. 서버 설정 → 역할에서 봇 역할이 너무 아래 있지 않게 (잠금 기능이 권한을 수정해야 함)
 

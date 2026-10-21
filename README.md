@@ -79,6 +79,34 @@
 
 자동 기능: 빈 방 삭제 · 방장이 나가면 남은 사람에게 위임(기본 이름이면 새 방장 이름으로 바뀜) · 한 사람당 방 1개.
 
+## 파일 구조
+
+기능별로 파일이 나뉘어 있어요. 고칠 기능의 파일만 열면 돼요.
+
+```
+main.py              봇 실행 (python main.py, 예전처럼 python bot.py도 돼요)
+core/
+  config.py          .env 설정값
+  store.py           data.json 저장/불러오기
+  client.py          봇 객체
+  utils.py           여러 기능이 같이 쓰는 도우미 (관리자 로그 등)
+  games.py           게임·티어 자동완성
+  webhook.py         글쓴이 이름·프로필로 보내기
+  card_helpers.py    카드에 쓰는 프로필 사진·서버 이모지
+  timeparse.py       '오늘 21시' 같은 시간 해석
+cogs/
+  rooms.py           통화방 생성·삭제·방장, 컨트롤 패널, /통화방
+  recruit.py         /구인, /구인마감
+  reservation.py     /예약
+  giveaway.py        /뽑기, /추첨
+  roles.py           /역할메뉴, /자동역할
+  settings.py        /통화방설정
+  help.py            /도움말
+  events.py          봇 시작, 음성 입퇴장, 버튼 같은 여러 기능에 걸친 이벤트
+cards/
+  recruit_card.py    구인·예약 이미지 카드 그리기
+```
+
 ## 1. 봇 만들기
 
 1. https://discord.com/developers/applications → New Application → Bot → **Reset Token**으로 토큰 복사

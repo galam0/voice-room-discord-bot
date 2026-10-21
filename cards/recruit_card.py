@@ -6,7 +6,9 @@ import re
 
 from PIL import Image, ImageDraw, ImageFont
 
-W = 1000
+W = 1000           # 그리는 크기 (마지막에 CARD_WIDTH로 줄여서 보냄)
+# 디스코드에 올라가는 카드 가로 크기(px). 작을수록 채팅에서 작게 보여요
+CARD_WIDTH = int(os.getenv("CARD_WIDTH", "600"))
 PAD = 48
 SLOT = 88          # 인원 칸 원 크기
 MAX_SLOTS = 10     # 이미지에 그릴 최대 칸 수
@@ -369,8 +371,8 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     slots = min(max(target, len(people)), MAX_SLOTS)
     per_row = 8
     rows = (slots + per_row - 1) // per_row
-    height = (PAD + ICON + 28 + len(lines) * 60 + 36 + (20 + 44 if tags else 0) + 20 + 34 + 36 + 1 + 36 + 34 + 20
-              + rows * (SLOT + 46) + (44 if footer else 0) + PAD - 10)
+    height = (PAD + ICON + 28 + len(lines) * 60 + 36 + (20 + 44 if tags else 0) + 20 + 34 + 24 + 1 + 24 + 34 + 20
+              + rows * (SLOT + 46) + (48 if footer else 0) + PAD - 10)
 
     img = Image.new("RGB", (W, height), BG)
     d = ImageDraw.Draw(img)
@@ -422,9 +424,9 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     f_sub = font(26)
     meta = meta or f"구인자 {author}   ·   음성 {voice_name}"
     rich_draw(img, d, (PAD, y), rich_ellipsize(d, atoms(meta), f_sub, W - PAD * 2), f_sub, SUB)
-    y += 34 + 36
+    y += 34 + 24
     d.line((PAD, y, W - PAD, y), fill=(63, 65, 71), width=2)
-    y += 1 + 36
+    y += 1 + 24
 
     # 인원
     f_label = font(26, True)
@@ -438,8 +440,8 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
     y += 34 + 20
 
     gap = (W - PAD * 2 - per_row * SLOT) / (per_row - 1)
-    f_name = font(20)
-    f_badge = font(16, True)
+    f_name = font(24)
+    f_badge = font(20, True)
     for i in range(slots):
         r, c = divmod(i, per_row)
         x = PAD + c * (SLOT + gap)
@@ -455,7 +457,7 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
                 img.paste(faded, (int(x), int(sy)), faded)
                 d.ellipse((x, sy, x + SLOT, sy + SLOT), outline=accent, width=3)
                 if not count_pending:
-                    pill(d, cx - 26, sy + SLOT - 22, "예정", f_badge, accent, pad_x=10, h=28)
+                    pill(d, cx - 30, sy + SLOT - 24, "예정", f_badge, accent, pad_x=10, h=32)
             else:
                 img.paste(av, (int(x), int(sy)), av)
                 if i == 0:  # 첫 번째 = 구인자
@@ -471,11 +473,14 @@ def render_card(*, title: str, content: str, author: str, voice_name: str, targe
         d.text((W - PAD, y + rows * (SLOT + 46) - 10), f"외 {target - MAX_SLOTS}자리", font=f_name, fill=MUTED, anchor="rs")
 
     if footer:
-        d.text((PAD, y + rows * (SLOT + 46) + 14), footer, font=font(22), fill=MUTED)
+        d.text((PAD, y + rows * (SLOT + 46) + 14), footer, font=font(26), fill=MUTED)
 
     if status in FADED:
         overlay = Image.new("RGBA", img.size, (30, 31, 34, 110))
         img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+
+    if 0 < CARD_WIDTH < W:
+        img = img.resize((CARD_WIDTH, round(img.height * CARD_WIDTH / W)), Image.LANCZOS)
 
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)

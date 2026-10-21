@@ -264,7 +264,27 @@ async def notify(channel: discord.VoiceChannel, text: str):
         pass
 
 
+async def admin_log(guild, text: str):
+    """관리자 로그 채널에 한 줄 기록 (채널이 안 정해져 있으면 아무것도 안 함)."""
+    if guild is None:
+        return
+    cid = store.guild(guild.id).get("log")
+    ch = guild.get_channel(cid) if cid else None
+    if ch is None:
+        return
+    try:
+        await ch.send(text, allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException:
+        pass
+
+
+def owner_tag(channel) -> str:
+    room = store.room(channel.id)
+    return f"<@{room['owner']}>" if room else "?"
+
+
 async def delete_room(channel: discord.VoiceChannel, reason: str):
+    asyncio.create_task(admin_log(channel.guild, f"⚫ 방 삭제 · **{channel.name}** ({reason})"))
     store.remove_room(channel.id)
     await close_post(channel.id)
     try:
@@ -316,6 +336,7 @@ async def create_room(member: discord.Member, category, name=None, limit=0, game
     )
     store.add_room(channel.id, member.id, member.guild.id, custom_name=bool(name), game=game)
     log.info("방 생성: %s (방장 %s)", channel.name, member)
+    asyncio.create_task(admin_log(member.guild, f"🟢 방 생성 · {channel.mention} · {member.mention}"))
     asyncio.create_task(send_panel(channel, member))
     return channel
 
@@ -333,7 +354,9 @@ def existing_room(guild: discord.Guild, member: discord.Member):
 
 async def transfer_owner(channel: discord.VoiceChannel, new_owner: discord.Member):
     room = store.room(channel.id)
+    old = f"<@{room['owner']}>" if room else "?"
     store.update_room(channel.id, owner=new_owner.id)
+    asyncio.create_task(admin_log(channel.guild, f"👑 방장 변경 · {channel.mention} · {old} → {new_owner.mention}"))
     if room and room["locked"]:
         await channel.set_permissions(new_owner, connect=True, reason="방장 위임")
     await notify(channel, f"👑 {new_owner.mention}님이 방장이 됐어요.")
@@ -366,16 +389,19 @@ async def lock_room(ch: discord.VoiceChannel, owner: discord.Member):
         overwrites[m] = ow
     await ch.edit(overwrites=overwrites)
     store.update_room(ch.id, locked=True)
+    await admin_log(guild, f"🔒 잠금 · {ch.mention} · {owner.mention}")
 
 
 async def unlock_room(ch: discord.VoiceChannel):
     # 카테고리 기본 권한으로 되돌림
     await ch.edit(overwrites=dict(ch.category.overwrites) if ch.category else {})
     store.update_room(ch.id, locked=False)
+    await admin_log(ch.guild, f"🔓 공개 · {ch.mention} · {owner_tag(ch)}")
 
 
 async def allow_member(ch: discord.VoiceChannel, member: discord.Member, by) -> str:
     await ch.set_permissions(member, connect=True, reason=f"{by} 허용")
+    await admin_log(ch.guild, f"✅ 허용 · {ch.mention} · {member.mention}")
     extra = "" if store.room(ch.id)["locked"] else " (지금은 공개 상태라 원래 누구나 들어올 수 있어요)"
     return f"{member.mention}님이 {ch.mention}에 들어올 수 있어요.{extra}"
 
@@ -383,12 +409,14 @@ async def allow_member(ch: discord.VoiceChannel, member: discord.Member, by) -> 
 async def rename_room(ch: discord.VoiceChannel, name: str) -> str:
     if await try_rename(ch, name):
         store.update_room(ch.id, custom_name=True)
+        await admin_log(ch.guild, f"✏️ 이름 변경 · {ch.mention} · {owner_tag(ch)}")
         return f"이름을 **{name}**(으)로 바꿨어요."
     return "디스코드 제한으로 채널 이름은 10분에 2번까지만 바꿀 수 있어요. 잠시 뒤에 다시 해 주세요."
 
 
 async def set_limit(ch: discord.VoiceChannel, limit: int) -> str:
     await ch.edit(user_limit=limit)
+    await admin_log(ch.guild, f"👥 인원 {limit or '제한 없음'} · {ch.mention} · {owner_tag(ch)}")
     return "인원 제한을 없앴어요." if limit == 0 else f"인원을 **{limit}명**으로 제한했어요."
 
 
@@ -894,6 +922,7 @@ async def on_member_join(member: discord.Member):
     if roles:
         try:
             await member.add_roles(*roles, reason="자동 역할")
+            await admin_log(member.guild, f"🏷️ 자동 역할 · {member.mention} · {' '.join(r.mention for r in roles)}")
         except discord.HTTPException as e:
             log.warning("자동 역할 실패 (%s): %s", member.guild.name, e)
 
@@ -1175,10 +1204,20 @@ async def cmd_setup_list(interaction: discord.Interaction):
     embed.add_field(name="구인 채널", value=f"<#{recruit}>" if recruit else "명령어 친 채널", inline=False)
     auto = store.guild(gid).get("auto_roles", [])
     embed.add_field(name="자동 역할", value=" ".join(f"<@&{r}>" for r in auto) or "없음", inline=False)
+    log_ch = store.guild(gid).get("log")
+    embed.add_field(name="로그 채널", value=f"<#{log_ch}>" if log_ch else "없음", inline=False)
     room_cat = store.room_category(gid)
     embed.add_field(name="방 카테고리 (기본)", value=f"📁 <#{room_cat}>" if room_cat else "생성 채널이 있는 카테고리",
                     inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@setup_group.command(name="로그채널", description="방 생성·삭제, 방장 변경, 설정 변경 같은 기록을 남길 채널 (비우면 끔)")
+async def cmd_setup_log(interaction: discord.Interaction, 채널: discord.TextChannel | None = None):
+    store.guild(interaction.guild.id)["log"] = 채널.id if 채널 else None
+    store.save()
+    msg = f"이제 {채널.mention}에 기록을 남겨요." if 채널 else "로그를 껐어요."
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 @setup_group.command(name="카테고리", description="통화방이 만들어질 카테고리를 정해요")
@@ -1449,6 +1488,7 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
         return
     info.update(channel=target.id, message=msg.id, webhook=webhook_id)
     store.set_post(voice.id, **info)
+    await admin_log(interaction.guild, f"📢 구인 · {member.mention} · {voice.mention} · {msg.jump_url}")
     done = f"구인 글을 올렸어요: {msg.jump_url}"
     if roles and not mention_ok(interaction.guild, roles, target):
         done += "\n⚠️ 역할 멘션이 알림으로 가지 않았을 수 있어요. 관리자에게 그 역할의 '@멘션 허용' 설정을 부탁해 주세요."
@@ -1491,8 +1531,10 @@ async def apply_menu_reaction(payload: discord.RawReactionActionEvent, add: bool
     try:
         if add and role not in member.roles:
             await member.add_roles(role, reason="역할 메뉴")
+            await admin_log(guild, f"🏷️ 역할 받음 · {member.mention} · {role.mention}")
         elif not add and role in member.roles:
             await member.remove_roles(role, reason="역할 메뉴")
+            await admin_log(guild, f"🏷️ 역할 뺌 · {member.mention} · {role.mention}")
     except discord.HTTPException as e:
         log.warning("역할 메뉴 처리 실패 (%s): %s", role.name, e)
 
@@ -1735,6 +1777,7 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
             f"{cmd('통화방설정 지정')} 기존 음성 채널을 생성 채널로",
             f"{cmd('통화방설정 해제')} 생성 채널 지정 풀기",
             f"{cmd('통화방설정 카테고리')} 방이 만들어질 카테고리",
+            f"{cmd('통화방설정 로그채널')} 관리자 기록 채널",
         ]))
         admin.add_field(name="게임·구인", inline=False, value="\n".join([
             f"{cmd('통화방설정 게임추가')} 게임 등록 (아이콘 첨부 가능)",
@@ -1957,6 +2000,7 @@ async def handle_res_cancel(interaction: discord.Interaction, message_id: int):
     await interaction.response.defer()
     store.remove_res(message_id)
     await update_res_post(message_id, res, status="cancelled", msg=interaction.message)
+    await admin_log(interaction.guild, f"📅 예약 취소 · {interaction.user.mention} · {interaction.message.jump_url}")
     await interaction.followup.send("예약을 취소했어요.", ephemeral=True)
 
 
@@ -2078,6 +2122,7 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
     # 버튼에 메시지 ID가 들어가야 해서 올린 뒤에 붙임
     await edit_post(target.id, msg.id, webhook_id, view=res_view(msg.id, res))
     store.set_res(msg.id, res)
+    await admin_log(interaction.guild, f"📅 예약 · {member.mention} · {time_text(res['start_at'])} · {msg.jump_url}")
     done = f"예약했어요: {msg.jump_url} ({time_text(res['start_at'])})"
     if roles and not mention_ok(interaction.guild, roles, target):
         done += "\n⚠️ 역할 멘션이 알림으로 가지 않았을 수 있어요. 관리자에게 그 역할의 '@멘션 허용' 설정을 부탁해 주세요."
@@ -2167,6 +2212,8 @@ async def finish_giveaway(message_id: int, reroll: bool = False):
     pool = [u for u in entrants if u.id not in previous]
     winners = random.sample(pool, min(g["count"], len(pool))) if pool else []
     g.update(ended=True, winners=[w.id for w in winners], ended_at=time.time())
+    await admin_log(msg.guild, f"🎉 추첨 {'다시 뽑기' if reroll else '결과'} · {g['prize']} · "
+                               f"{' '.join(w.mention for w in winners) or '당첨자 없음'} ({len(entrants)}명 참여)")
     store.save()
     try:
         await msg.edit(embed=giveaway_embed(g, g["winners"], len(entrants)))
@@ -2268,6 +2315,16 @@ async def cmd_giveaway_reroll(interaction: discord.Interaction, 추첨: str):
     await interaction.response.defer(ephemeral=True)
     winners = await finish_giveaway(int(추첨), reroll=True)
     await interaction.followup.send("다시 뽑았어요." if winners else "뽑을 사람이 없어요.", ephemeral=True)
+
+
+LOGGED_GROUPS = ("통화방설정", "역할메뉴", "자동역할", "추첨")
+
+
+@bot.event
+async def on_app_command_completion(interaction: discord.Interaction, command):
+    if interaction.guild and command.qualified_name.split()[0] in LOGGED_GROUPS:
+        opts = " ".join(f"{k}:{getattr(v, 'name', getattr(v, 'filename', v))}" for k, v in interaction.namespace)
+        await admin_log(interaction.guild, f"⚙️ {interaction.user.mention} · `/{command.qualified_name}` {opts}".strip())
 
 
 @bot.tree.error

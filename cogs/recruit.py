@@ -13,7 +13,7 @@ from cards import recruit_card
 from core.config import RECRUIT_EXPIRE_HOURS, TZ
 from core.store import store
 from core.client import bot
-from core.utils import admin_log, existing_room, humans, mention_ok
+from core.utils import admin_log, humans, mention_ok
 from core.games import game_autocomplete, resolve_game, tier_autocomplete
 from core.webhook import edit_post, post_as
 from core.card_helpers import _applicant_entry, _avatar_bytes, custom_emoji_images
@@ -134,12 +134,26 @@ async def handle_recruit_apply(interaction: discord.Interaction, voice_id: int):
         await interaction.response.send_message("이미 통화방에 있어요!", ephemeral=True)
         return
     applicants = info.setdefault("applicants", [])
-    if any(a["id"] == user.id for a in applicants):
+    mine = next((a for a in applicants if a["id"] == user.id), None)
+    if mine:
         info["applicants"] = [a for a in applicants if a["id"] != user.id]
         store.set_post(voice_id, **info)
         await interaction.response.send_message("참가 취소!", ephemeral=True)
+        if mine.get("allowed") and voice:  # 잠긴 방이라 봇이 열어 줬던 입장 허용 되돌리기
+            try:
+                await voice.set_permissions(user, overwrite=None, reason="구인 참가 취소")
+            except discord.HTTPException:
+                pass
     else:
-        applicants.append({"id": user.id, "name": user.display_name})
+        entry = {"id": user.id, "name": user.display_name}
+        room = store.room(voice_id)
+        if voice and room and room.get("locked") and not voice.permissions_for(user).connect:
+            try:
+                await voice.set_permissions(user, connect=True, reason="구인 참가 (잠긴 방)")
+                entry["allowed"] = True
+            except discord.HTTPException:
+                pass
+        applicants.append(entry)
         store.set_post(voice_id, **info)
         await interaction.response.send_message(
             f"참가 완료! {voice.mention if voice else '통화방'}에 들어와 주세요. 들어오기 전까지는 예정으로 떠요.", ephemeral=True)
@@ -175,7 +189,7 @@ async def cmd_recruit(interaction: discord.Interaction, 내용: app_commands.Ran
                       티어: app_commands.Range[str, 1, 30] | None = None,
                       멘션역할: discord.Role | None = None):
     member = interaction.user
-    voice = member.voice.channel if member.voice and member.voice.channel else existing_room(interaction.guild, member)
+    voice = member.voice.channel if member.voice else None
     if voice is None:
         await interaction.response.send_message("통화방에 들어가 있어야 구인할 수 있어요!", ephemeral=True)
         return

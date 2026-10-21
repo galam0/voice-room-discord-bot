@@ -33,7 +33,8 @@ async def cmd_pick(interaction: discord.Interaction, 항목: app_commands.Range[
             return
         items = [m.mention for m in humans(voice)]
     if len(items) < 2:
-        await interaction.response.send_message("두 개 이상 적어야 뽑을 수 있어요!", ephemeral=True)
+        msg = "두 개 이상 적어야 뽑을 수 있어요!" if 항목 else "통화방에 2명 이상 있어야 뽑을 수 있어요!"
+        await interaction.response.send_message(msg, ephemeral=True)
         return
     picked = random.sample(items, min(개수, len(items)))
     await interaction.response.send_message(f"🎲 {'  ·  '.join(picked)}  ({len(items)}개 중)",
@@ -173,16 +174,16 @@ async def cmd_giveaway_start(interaction: discord.Interaction, 상품: app_comma
     target = 채널 or interaction.channel
     g = {"guild": interaction.guild.id, "channel": target.id, "prize": 상품, "count": 당첨,
          "end_at": end_at, "host": interaction.user.id, "ended": False}
+    await interaction.response.defer(ephemeral=True)
     try:
         msg = await target.send(embed=giveaway_embed(g))
         await msg.add_reaction(GIVEAWAY_EMOJI)
     except discord.HTTPException:
-        await interaction.response.send_message(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.",
-                                                ephemeral=True)
+        await interaction.followup.send(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.", ephemeral=True)
         return
     store.data["giveaways"][str(msg.id)] = g
     store.save()
-    await interaction.response.send_message(f"추첨 올렸어요! {msg.jump_url}", ephemeral=True)
+    await interaction.followup.send(f"추첨 올렸어요! {msg.jump_url}", ephemeral=True)
 
 
 @giveaway_group.command(name="끝내기", description="진행 중인 추첨을 지금 바로 끝내고 당첨자를 뽑아요")

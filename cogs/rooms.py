@@ -108,8 +108,9 @@ async def lock_room(ch: discord.VoiceChannel, owner: discord.Member):
         ow = overwrites.get(target, discord.PermissionOverwrite())
         ow.connect = False
         overwrites[target] = ow
-    # 지금 있는 사람, 방장, 봇은 허용
-    for m in set(ch.members) | {owner, guild.me}:
+    # 지금 있는 사람, 방장, 봇, 구인 글에 참가를 누른 사람은 허용
+    applicants = {guild.get_member(a["id"]) for a in (store.post(ch.id) or {}).get("applicants", [])} - {None}
+    for m in set(ch.members) | {owner, guild.me} | applicants:
         ow = overwrites.get(m, discord.PermissionOverwrite())
         ow.connect = True
         overwrites[m] = ow
@@ -395,8 +396,9 @@ async def cmd_panel(interaction: discord.Interaction):
     ch = await owned_room(interaction)
     if not ch:
         return
+    await interaction.response.defer(ephemeral=True)
     await send_panel(ch, interaction.user)
-    await interaction.response.send_message(f"{ch.mention} 채팅에 패널 올렸어요!", ephemeral=True)
+    await interaction.followup.send(f"{ch.mention} 채팅에 패널 올렸어요!", ephemeral=True)
 
 
 @room_group.command(name="정보", description="지금 있는 통화방(또는 내 방) 정보를 보여줘요")

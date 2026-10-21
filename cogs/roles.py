@@ -131,14 +131,14 @@ async def cmd_menu_create(interaction: discord.Interaction, 제목: app_commands
                           채널: discord.TextChannel | None = None):
     target = 채널 or interaction.channel
     menu = {"guild": interaction.guild.id, "channel": target.id, "title": 제목, "desc": 설명, "items": {}}
+    await interaction.response.defer(ephemeral=True)
     try:
         msg = await target.send(embed=menu_embed(menu))
     except discord.HTTPException:
-        await interaction.response.send_message(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.", ephemeral=True)
+        await interaction.followup.send(f"{target.mention}에 글을 못 올렸어요! 봇 권한을 확인해 보세요.", ephemeral=True)
         return
     store.set_menu(msg.id, menu)
-    await interaction.response.send_message(
-        f"역할 메뉴 올렸어요! {msg.jump_url}", ephemeral=True)
+    await interaction.followup.send(f"역할 메뉴 올렸어요! {msg.jump_url}", ephemeral=True)
 
 
 @menu_group.command(name="추가", description="역할 메뉴에 이모지와 역할을 넣어요 (같은 이모지면 역할을 바꿔요)")

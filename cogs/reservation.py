@@ -90,7 +90,7 @@ def res_status(res: dict) -> str:
     return "full" if len(res["participants"]) >= res["target"] else "open"
 
 
-def res_view(message_id: int, res: dict, finished: bool = False) -> discord.ui.View | None:
+def res_view(message_id: int, finished: bool = False) -> discord.ui.View | None:
     view = discord.ui.View(timeout=None)
     if not finished:
         view.add_item(discord.ui.Button(label="참가", style=discord.ButtonStyle.primary, custom_id=f"res_join:{message_id}"))
@@ -102,7 +102,7 @@ async def update_res_post(message_id: int, res: dict, status: str | None = None)
     status = status or res_status(res)
     finished = status in ("started", "cancelled")
     await edit_post(res["channel"], message_id, res.get("webhook"),
-                    attachments=[await res_card_file(res, status)], view=res_view(message_id, res, finished))
+                    attachments=[await res_card_file(res, status)], view=res_view(message_id, finished))
 
 
 async def handle_res_join(interaction: discord.Interaction, message_id: int):
@@ -278,7 +278,7 @@ async def cmd_reserve(interaction: discord.Interaction, 시간: app_commands.Ran
         return
     res["webhook"] = webhook_id
     # 버튼에 메시지 ID가 들어가야 해서 올린 뒤에 붙임
-    await edit_post(target.id, msg.id, webhook_id, view=res_view(msg.id, res))
+    await edit_post(target.id, msg.id, webhook_id, view=res_view(msg.id))
     store.set_res(msg.id, res)
     await admin_log(interaction.guild, f"📅 예약 · {member.mention} · {time_text(res['start_at'])} · {msg.jump_url}")
     done = f"예약 완료! {time_text(res['start_at'])} {msg.jump_url}"

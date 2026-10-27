@@ -150,7 +150,7 @@ async def on_guild_channel_delete(channel):
             store.save()
 
 
-LOGGED_GROUPS = ("통화방설정", "역할메뉴", "자동역할", "추첨")
+LOGGED_GROUPS = ("통화방설정", "역할메뉴", "자동역할", "추첨", "인증")
 
 
 @bot.event

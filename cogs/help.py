@@ -77,6 +77,12 @@ def help_embeds(is_admin: bool) -> list[discord.Embed]:
             f"{cmd('추첨 끝내기')} 지금 바로 끝내기",
             f"{cmd('추첨 다시뽑기')} 끝난 추첨 다시 뽑기",
         ]))
+        admin.add_field(name="입장 인증 (닉네임·나이·성별 → 관리자 승인)", inline=False, value="\n".join([
+            f"{cmd('인증 설정')} 정상인·관리자·성별 역할, 승인 알림·게임 역할 채널 정하기/바꾸기",
+            f"{cmd('인증 채널만들기')} 인증 채널 만들고 안내 패널 올리기",
+            f"{cmd('인증 패널')} 패널 다시 올리기·문구 바꾸기",
+            f"{cmd('인증 정보')} 지금 설정 보기",
+        ]))
         admin.set_footer(text="처음이면: 만들기 → 게임추가 → (게임채널·카테고리·구인채널)")
         embeds.append(admin)
     return embeds

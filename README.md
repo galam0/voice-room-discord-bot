@@ -79,6 +79,24 @@
 
 자동 기능: 빈 방 삭제 · 방장이 나가면 남은 사람에게 위임(기본 이름이면 새 방장 이름으로 바뀜) · 한 사람당 방 1개.
 
+### 입장 인증 (`/인증`, 서버 관리 권한)
+
+새로 들어온 사람이 **닉네임·태어난 연도·성별**을 입력하면 관리자가 승인하는 기능이에요.
+
+1. 인증 채널의 **인증 시작** 버튼 → 팝업에 닉네임·태어난 연도(네 자리) 입력 → 닉네임이 바로 `닉네임 /07`(출생년도 두 자리)로 바뀌어요 (2007년생 → /07, 2010년생 → /10)
+2. 성별 버튼을 누르면 **성별 역할이 바로** 부여돼요
+3. 관리자 채널에 관리자 멘션과 함께 신청 글(**승인**/**거절** 버튼)이 올라와요
+4. 승인하면 **정상인 역할**이 부여되고 게임 역할 채널에 안내가 올라가요. 거절하면 성별 역할을 거두고 다시 신청할 수 있어요
+
+| 명령어 | 설명 |
+|---|---|
+| `/인증 설정` | 정상인·관리자·남성·여성 역할, 승인 알림 채널, 게임 역할 채널을 정해요 (바꿀 것만 입력하면 수정) |
+| `/인증 채널만들기` | 인증 채널을 만들고 패널을 올려요 (정상인 역할은 못 보게 권한 설정) |
+| `/인증 패널` | 패널을 다시 올리거나 다른 채널로 옮겨요 (`제목`·`설명`으로 문구 변경) |
+| `/인증 정보` | 지금 설정과 대기 중인 신청 수 |
+
+처음 설정: `/인증 설정`(역할·채널 지정) → `/인증 채널만들기`. 봇에게 **닉네임 관리** 권한이 필요하고, 봇 역할이 정상인·성별 역할보다 **위에** 있어야 해요 (서버 주인이나 봇보다 높은 역할인 사람은 닉네임을 바꿀 수 없어요). 승인 알림 채널은 관리자만 볼 수 있게 해 두세요.
+
 ## 파일 구조
 
 기능별로 파일이 나뉘어 있어요. 고칠 기능의 파일만 열면 돼요.
@@ -100,6 +118,7 @@ cogs/
   reservation.py     /예약
   giveaway.py        /뽑기, /추첨
   roles.py           /역할메뉴, /자동역할
+  verify/            입장 인증 (data.py 저장, views.py 버튼·팝업·승인, admin.py /인증)
   settings.py        /통화방설정
   help.py            /도움말
   events.py          봇 시작, 음성 입퇴장, 버튼 같은 여러 기능에 걸친 이벤트
@@ -112,8 +131,8 @@ cards/
 1. https://discord.com/developers/applications → New Application → Bot → **Reset Token**으로 토큰 복사
 2. OAuth2 → URL Generator
    - Scopes: `bot`, `applications.commands`
-   - Bot Permissions: **View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Mention Everyone(역할 멘션용), Manage Webhooks(구인·예약 글을 쓴 사람 이름으로), Connect, Manage Channels, Manage Roles, Move Members**
-   - 또는 초대 링크를 직접: `https://discord.com/oauth2/authorize?client_id=애플리케이션ID&permissions=823381008&scope=bot%20applications.commands`
+   - Bot Permissions: **View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Mention Everyone(역할 멘션용), Manage Webhooks(구인·예약 글을 쓴 사람 이름으로), Connect, Manage Channels, Manage Roles, Manage Nicknames(입장 인증 닉네임 변경), Move Members**
+   - 또는 초대 링크를 직접: `https://discord.com/oauth2/authorize?client_id=애플리케이션ID&permissions=957598736&scope=bot%20applications.commands`
 3. 만들어진 링크로 서버에 초대
 4. 서버 설정 → 역할에서 봇 역할이 너무 아래 있지 않게 (잠금 기능이 권한을 수정해야 함)
 

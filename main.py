@@ -11,7 +11,7 @@
 
 파일 구조
 - core/   여러 기능이 같이 쓰는 것 (설정, 저장소, 봇 객체, 웹후크, 도우미)
-- cogs/   기능별 명령어와 이벤트 (통화방, 구인, 예약, 추첨, 역할, 설정, 도움말)
+- cogs/   기능별 명령어와 이벤트 (통화방, 구인, 예약, 추첨, 역할, 입장 인증, 설정, 도움말)
 - cards/  이미지 카드 그리기
 """
 
@@ -25,6 +25,7 @@ import cogs.reservation  # noqa: F401
 import cogs.giveaway  # noqa: F401
 import cogs.roles  # noqa: F401
 import cogs.settings  # noqa: F401
+import cogs.verify  # noqa: F401
 import cogs.help  # noqa: F401
 import cogs.events  # noqa: F401
 

@@ -101,6 +101,15 @@ def request_embed(member: discord.Member, info: dict) -> discord.Embed:
     return embed
 
 
+async def dm_member(member: discord.Member, text: str) -> bool:
+    """본인에게만 보이는 DM 보내기. DM을 막아 둔 사람이면 False."""
+    try:
+        await member.send(text)
+        return True
+    except discord.HTTPException:  # Forbidden 포함
+        return False
+
+
 async def send_panel(channel: discord.TextChannel) -> discord.Message:
     return await channel.send(embed=panel_embed(channel.guild.id), view=panel_view())
 
@@ -265,12 +274,13 @@ async def handle_decision(interaction: discord.Interaction, user_id: int, approv
         embed.set_footer(text=f"✅ {interaction.user.display_name} 님이 승인")
         await interaction.edit_original_response(content="✅ 승인 완료", embed=embed, view=None)
         game_ch = guild.get_channel(c.get("game_channel") or 0)
+        text = f"✅ **{guild.name}** 인증이 완료됐어요! 🎉"
         if game_ch:
-            try:
-                await game_ch.send(f"{member.mention} 인증이 완료됐어요! 여기서 게임 역할을 골라 주세요 🎮",
-                                   allowed_mentions=discord.AllowedMentions(users=[member]))
-            except discord.HTTPException:
-                pass
+            text += f"\n{game_ch.mention} 에서 원하는 게임 역할을 골라 주세요 🎮"
+        if not await dm_member(member, text):
+            await interaction.followup.send(
+                f"승인은 됐지만 {member.mention} 님이 DM을 막아뒀어요. 직접 알려 주세요!",
+                ephemeral=True)
         await admin_log(guild, f"✅ 인증 승인 · {member.mention} · {interaction.user.mention}")
         return
 
@@ -287,12 +297,12 @@ async def handle_decision(interaction: discord.Interaction, user_id: int, approv
     embed.set_footer(text=f"❌ {interaction.user.display_name} 님이 거절")
     await interaction.edit_original_response(content="❌ 거절됨", embed=embed, view=None)
     verify_ch = guild.get_channel(c.get("channel") or 0)
+    text = f"❌ **{guild.name}** 인증이 거절됐어요. 입력한 정보를 확인하고 다시 신청해 주세요."
     if verify_ch:
-        try:
-            await verify_ch.send(f"{member.mention} 인증이 거절됐어요. 입력한 정보를 확인하고 다시 신청해 주세요.",
-                                 delete_after=60, allowed_mentions=discord.AllowedMentions(users=[member]))
-        except discord.HTTPException:
-            pass
+        text += f"\n{verify_ch.mention} 에서 '인증 시작'을 다시 누르면 돼요."
+    if not await dm_member(member, text):
+        await interaction.followup.send(
+            f"거절은 됐지만 {member.mention} 님이 DM을 막아뒀어요. 직접 알려 주세요!", ephemeral=True)
     await admin_log(guild, f"❌ 인증 거절 · {member.mention} · {interaction.user.mention}")
 
 
